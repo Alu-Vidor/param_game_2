@@ -1,0 +1,23 @@
+[
+  {
+    "scope": "app",
+    "shape": "app screen",
+    "theme": "dose",
+    "axes": "light/grotesk-sans/chromatic-green",
+    "hero": "not applicable",
+    "nav": "task top bar and model sections",
+    "footer": "local data and JSON import",
+    "imagery": "real computed interface",
+    "photos": [],
+    "entry": "production ledger",
+    "fingerprint": "plan-parameter-resource-ledger",
+    "sections": ["inputs", "plan", "accuracy"],
+    "signature": "parameter-linked optimal plan and resource ledger",
+    "waived": [
+      "F25: numerical matrices retain contextual horizontal scrolling"
+    ],
+    "prompt": "Business application for supplied parameterized quadratic programming task with readable typography",
+    "date": "2026-11-16",
+    "mode": "build"
+  }
+]

@@ -1,0 +1,23 @@
+{
+  "scanned": "2026-11-16",
+  "scope": "app",
+  "findings": {
+    "repository": "Empty param_game_2 checkout, no existing design system",
+    "material": "User-supplied quadratic-programming notebook and theory; computed plans and resource data",
+    "audience": "Ordinary business users with an optional matrix-based expert input",
+    "use": "Calculate an optimal plan and inspect parameter sensitivity",
+    "tone": "Utilitarian, readable, high contrast, restrained green",
+    "framework": "React and Vite, static GitHub Pages, Python in a Web Worker"
+  },
+  "preserve": [
+    "Mathematical problem",
+    "Supplied numerical examples",
+    "Readable typography requested in prior app"
+  ],
+  "introduce": [
+    "Dose palette adapted for Cyrillic",
+    "Task top bar",
+    "Editable production ledger",
+    "Parameter-linked numerical plan"
+  ]
+}
