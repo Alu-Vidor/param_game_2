@@ -5,11 +5,8 @@ import { download, number } from "../lib/workspace";
 import type { RationalFit } from "../engine/types";
 import LineChart from "./LineChart";
 
-export type ResultDetail = "charts" | "table" | "formulas";
 interface Props {
   scenario: Scenario;
-  detail: ResultDetail;
-  onDetailChange: (detail: ResultDetail) => void;
 }
 
 function csvCell(value: string | number | null) {
@@ -19,13 +16,13 @@ function csvCell(value: string | number | null) {
   return `"${safe.replaceAll('"', '""')}"`;
 }
 
-function polynomial(coefficients: number[]) {
+function polynomial(coefficients: number[], symbol: string) {
   const terms: string[] = [];
   for (let i = coefficients.length - 1; i >= 0; i--) {
     const value = coefficients[i];
     if (value === 0) continue;
     const coefficient = Number(Math.abs(value).toPrecision(8)).toString();
-    const power = i === 0 ? "" : i === 1 ? "t" : `t^${i}`;
+    const power = i === 0 ? "" : i === 1 ? symbol : `${symbol}^${i}`;
     const body = `${power && Math.abs(value) === 1 ? "" : coefficient}${power && Math.abs(value) !== 1 ? " × " : ""}${power}`;
     terms.push(`${value < 0 ? "− " : terms.length ? "+ " : ""}${body}`);
   }
@@ -36,10 +33,12 @@ function Formula({
   fit,
   name,
   index,
+  symbol,
 }: {
   fit: RationalFit;
   name: string;
   index: number;
+  symbol: string;
 }) {
   return (
     <div className="formula-item">
@@ -47,14 +46,14 @@ function Formula({
       <div
         className="formula-expression"
         role="math"
-        aria-label={`Приближение x${index + 1}: (${polynomial(fit.numerator)}) / (${polynomial(fit.denominator)})`}
+        aria-label={`Приближение x${index + 1}: (${polynomial(fit.numerator, symbol)}) / (${polynomial(fit.denominator, symbol)})`}
       >
         <span>
           x̃<sub>{index + 1}</sub>(t) ={" "}
         </span>
         <span className="fraction">
-          <span>{polynomial(fit.numerator)}</span>
-          <span>{polynomial(fit.denominator)}</span>
+          <span>{polynomial(fit.numerator, symbol)}</span>
+          <span>{polynomial(fit.denominator, symbol)}</span>
         </span>
       </div>
       <details>
@@ -74,7 +73,7 @@ function Formula({
   );
 }
 
-export default function Results({ scenario, detail, onDetailChange }: Props) {
+export default function Results({ scenario }: Props) {
   const [index, setIndex] = useState(0);
   const id = useId();
   const result = scenario.snapshot?.result;
@@ -86,7 +85,7 @@ export default function Results({ scenario, detail, onDetailChange }: Props) {
       <section className="section result-empty">
         <h2>Сначала рассчитайте модель</h2>
         <p>
-          Заполните исходные данные и нажмите «Рассчитать план». Здесь появятся
+          Заполните исходные данные и нажмите «Рассчитать». Здесь появятся
           значения переменных, результат и загрузка ограничений.
         </p>
       </section>
@@ -96,23 +95,18 @@ export default function Results({ scenario, detail, onDetailChange }: Props) {
   const variableNames = chosen.x.map(
     (_, i) => scenario.variableNames[i] || `Переменная ${i + 1}`,
   );
-  const isProduction = scenario.config.kind === "production";
-  const resources = scenario.config.production.R.length;
-  const n = chosen.x.length;
   const restrictions = result.canonical.K.map((row, i) => {
-    const used = row.reduce(
-      (total, coefficient, j) => total + coefficient * chosen.x[j],
-      0,
-    );
-    const limit = result.canonical.l0[i] + result.canonical.l1[i] * chosen.t;
+    const used =
+      chosen.constraintLeft?.[i] ??
+      row.reduce(
+        (total, coefficient, j) => total + coefficient * chosen.x[j],
+        0,
+      );
+    const limit =
+      chosen.constraintRight?.[i] ??
+      result.canonical.l0[i] + result.canonical.l1[i] * chosen.t;
     const slack = chosen.slack[i] ?? limit - used;
-    const label = !isProduction
-      ? `Ограничение ${i + 1}`
-      : i < resources
-        ? scenario.resourceNames[i] || `Ресурс ${i + 1}`
-        : i < resources + n
-          ? `Мощность: ${variableNames[i - resources]}`
-          : `Неотрицательность: ${variableNames[i - resources - n]}`;
+    const label = "Строка K: " + (i + 1);
     return {
       label,
       used,
@@ -122,6 +116,20 @@ export default function Results({ scenario, detail, onDetailChange }: Props) {
       violated: slack < -1e-6,
     };
   });
+  const nonnegative = scenario.config.nonnegative !== false;
+  const limits = [
+    ...restrictions,
+    ...(nonnegative
+      ? chosen.x.map((value, i) => ({
+          label: variableNames[i] + " ≥ 0",
+          used: -value,
+          limit: 0,
+          slack: value,
+          active: Math.abs(value) < 1e-6,
+          violated: value < -1e-6,
+        }))
+      : []),
+  ];
   function csv() {
     const header = [
       scenario.parameter,
@@ -133,7 +141,7 @@ export default function Results({ scenario, detail, onDetailChange }: Props) {
         `${name}, приближение`,
         `${name}, абсолютная ошибка`,
       ]),
-      ...restrictions.map((row) => `Запас: ${row.label}`),
+      ...limits.map((row) => `Остаток: ${row.label}`),
     ];
     const rows = result!.samples.map((p) => [
       p.t,
@@ -146,16 +154,17 @@ export default function Results({ scenario, detail, onDetailChange }: Props) {
         p.xApprox ? Math.abs(value - p.xApprox[i]) : null,
       ]),
       ...p.slack,
+      ...(nonnegative ? p.x : []),
     ]);
     download(
       "\uFEFF" +
         [header, ...rows].map((row) => row.map(csvCell).join(";")).join("\r\n"),
-      "planning-results.csv",
+      "qp-results.csv",
       "text/csv;charset=utf-8",
     );
   }
   const tableId = `${id}-table`;
-  const restrictionTable = (rows: typeof restrictions, suffix: string) => (
+  const restrictionTable = (rows: typeof restrictions) => (
     <div
       className="table-scroll"
       role="region"
@@ -164,20 +173,20 @@ export default function Results({ scenario, detail, onDetailChange }: Props) {
     >
       <table className="data-table constraint-table">
         <caption className="visually-hidden">
-          Использование ограничений для выбранного численного решения
+          Остатки ограничений для выбранного численного решения
         </caption>
         <thead>
           <tr>
             <th scope="col">Ограничение</th>
-            <th scope="col">Использовано</th>
-            <th scope="col">Доступно</th>
-            <th scope="col">Запас</th>
+            <th scope="col">Левая часть</th>
+            <th scope="col">Правая часть</th>
+            <th scope="col">Остаток</th>
             <th scope="col">Состояние</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row, i) => (
-            <tr key={`${suffix}-${i}`}>
+            <tr key={i}>
               <th scope="row">{row.label}</th>
               <td className="num">{number(row.used)}</td>
               <td className="num">{number(row.limit)}</td>
@@ -186,8 +195,8 @@ export default function Results({ scenario, detail, onDetailChange }: Props) {
                 {row.violated
                   ? "Нарушено"
                   : row.active
-                    ? "Использовано полностью"
-                    : "Есть запас"}
+                    ? "Активно"
+                    : "Выполнено"}
               </td>
             </tr>
           ))}
@@ -264,52 +273,27 @@ export default function Results({ scenario, detail, onDetailChange }: Props) {
       </section>
       <section className="section constraints-section">
         <div className="section-heading">
-          <h2>
-            {isProduction ? "Ресурсы и мощности" : "Выполнение ограничений"}
-          </h2>
+          <h2>Ограничения</h2>
           <p>
-            Запас равен доступному объёму минус использованный. Нулевой запас
-            означает активное ограничение.
+            Остаток равен правой части минус левая. Нулевой остаток означает
+            активное ограничение.
           </p>
         </div>
-        {restrictionTable(
-          isProduction ? restrictions.slice(0, resources + n) : restrictions,
-          "main",
-        )}
-        {isProduction && (
-          <details className="bound-details">
-            <summary>Проверка неотрицательности переменных</summary>
-            {restrictionTable(restrictions.slice(resources + n), "bounds")}
-          </details>
+        {limits.length ? (
+          restrictionTable(limits)
+        ) : (
+          <p>Переменные свободны. Строк матрицы K нет.</p>
         )}
       </section>
       <section className="section analysis-section">
         <div className="analysis-toolbar">
-          <nav className="detail-tabs" aria-label="Представление результатов">
-            {(
-              [
-                ["charts", "Динамика"],
-                ["table", "Таблица"],
-                ["formulas", "Формулы"],
-              ] as const
-            ).map(([key, label]) => (
-              <button
-                type="button"
-                key={key}
-                aria-current={detail === key ? "page" : undefined}
-                className={detail === key ? "active" : ""}
-                onClick={() => onDetailChange(key)}
-              >
-                {label}
-              </button>
-            ))}
-          </nav>
           <button type="button" className="button quiet" onClick={csv}>
             <Download size={17} aria-hidden="true" />
             <span>Скачать CSV</span>
           </button>
         </div>
-        {detail === "charts" && (
+        <details className="result-disclosure">
+          <summary>Графики</summary>
           <div className="chart-content">
             <div className="chart-legend">
               <span>
@@ -356,8 +340,9 @@ export default function Results({ scenario, detail, onDetailChange }: Props) {
               приближение между ними.
             </p>
           </div>
-        )}
-        {detail === "table" && (
+        </details>
+        <details className="result-disclosure">
+          <summary>Таблица решений</summary>
           <div className="table-content">
             <div className="section-heading">
               <h2 id={tableId}>Результаты в расчётных точках</h2>
@@ -431,38 +416,47 @@ export default function Results({ scenario, detail, onDetailChange }: Props) {
               </table>
             </div>
           </div>
-        )}
-        {detail === "formulas" && (
+        </details>
+        <details className="result-disclosure">
+          <summary>Формулы</summary>
           <div className="formula-content">
             <div className="section-heading">
-              <h2>Рациональное приближение плана</h2>
+              <h2>Рациональное приближение решения</h2>
               <p>
-                Коэффициенты подобраны по расчётным точкам. В формулах
-                используется t, ваш параметр «{scenario.parameter}».
+                {result.argumentCenter === undefined
+                  ? "Коэффициенты записаны в степенях t."
+                  : "Коэффициенты записаны в степенях s, где s = t − (" +
+                    String(result.argumentCenter) +
+                    ")."}
               </p>
             </div>
             {result.fits.map((fit, i) => (
-              <Formula key={i} fit={fit} name={variableNames[i]} index={i} />
+              <Formula
+                key={i}
+                fit={fit}
+                name={variableNames[i]}
+                index={i}
+                symbol={result.argumentCenter === undefined ? "t" : "s"}
+              />
             ))}
             <div className="formula-item">
               <h3>Приближение результата</h3>
               <p className="formula-expression">
-                f̃(t) = x̃(t)ᵀ A x̃(t) + b(t)ᵀ x̃(t) + c(t)
+                f̃(t) = x̃(t)ᵀ A(t) x̃(t) + b(t)ᵀ x̃(t) + c(t)
               </p>
               <p className="help-text">
-                Результат вычисляется подстановкой приближённого плана в
+                Результат вычисляется подстановкой приближённого вектора в
                 исходную целевую функцию.
               </p>
             </div>
           </div>
-        )}
+        </details>
         <p className="notice result-caution">
           <Info size={18} aria-hidden="true" />
           <span>
             Приближение проверяется в расчётных точках и на дополнительной
-            сетке. Проверка сетки не гарантирует выполнение ограничений при
-            каждом значении параметра. Для решения используйте численный план и
-            раздел «Метод и точность».
+            сетке. Гарантия между узлами требует отдельной проверки всего
+            интервала.
           </span>
         </p>
       </section>

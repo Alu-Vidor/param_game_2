@@ -86,6 +86,47 @@ class EngineTests(unittest.TestCase):
             self.assertTrue(row["kkt"])
             self.assertLess(row["stationarity"], 1e-8)
 
+    def test_rational_input_changes_the_problem_at_each_node(self):
+        config = single_variable()
+        config.update(coefficientMode="rational", nonnegative=False,
+                      degreeNumerator=2, degreeDenominator=2, weightValue=.5)
+        def function(numerator, denominator=(1,)):
+            return {"numerator": numerator, "denominator": denominator}
+        config["coefficientFunctions"] = {
+            "A": [[function([-1, -1])]],
+            "b": [function([-2, 0, -2], [1, 0, 1])],
+            "c": function([0, 0, 1]),
+            "K": [[function([-1, -1])]],
+            "l": [function([.5, .5])],
+        }
+        result = engine.run_calculation(config)
+        for row in result["samples"]:
+            t = row["t"]
+            np.testing.assert_allclose(row["x"], [-.5], atol=1e-9)
+            self.assertAlmostEqual(row["value"], .75 - .25*t + t*t)
+            self.assertEqual(row["constraintLeft"], row["constraintRight"])
+            self.assertTrue(row["kkt"])
+        self.assertLess(result["diagnostics"]["maxValueError"], 1e-8)
+        config["coefficientFunctions"]["c"] = function([1], [1, -3, 2.25])
+        with self.assertRaisesRegex(ValueError, "знаменатель"):
+            engine.run_calculation(config)  # Double root at 2/3, between nodes.
+
+    def test_constraint_dimensions_at_zero_and_at_the_maximum(self):
+        config = single_variable(b0=-2)
+        config["nonnegative"] = False
+        config["quadratic"].update(K=[], l0=[], l1=[])
+        result = engine.run_calculation(config)
+        self.assertTrue(all(row["x"] == [-1] and row["slack"] == [] for row in result["samples"]))
+        config["quadratic"] = {
+            "A": (-np.eye(6)).tolist(), "b0": [4] * 6, "b1": [0] * 6,
+            "c0": 0, "c1": 0, "K": np.tile(np.eye(6), (4, 1))[:21].tolist(),
+            "l0": [1] * 21, "l1": [0] * 21,
+        }
+        result = engine.run_calculation(config)
+        for row in result["samples"]:
+            np.testing.assert_allclose(row["x"], [1] * 6, atol=1e-8)
+            self.assertEqual(len(row["slack"]), 21)
+
     def test_active_upper_bound(self):
         result = engine.run_calculation(single_variable(b0=8, upper=2))
         for row in result["samples"]:
@@ -232,7 +273,7 @@ class EngineTests(unittest.TestCase):
         result = engine.run_calculation(config)
         expected = sum(2 * np.sum((np.array(row["x"]) - row["xApprox"])**2)
                        + .5 * (row["value"] - row["valueApprox"])**2 for row in result["samples"])
-        self.assertAlmostEqual(result["diagnostics"]["loss"], expected, places=10)
+        self.assertAlmostEqual(result["diagnostics"]["loss"], expected / 2.5, places=10)
 
     def test_fit_timeout_keeps_real_loss_and_unconfirmed_status(self):
         config = single_variable()

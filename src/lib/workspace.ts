@@ -1,7 +1,7 @@
+import type { CoefficientExpressions } from "./coefficient";
 import type {
   CalculationConfig,
   CalculationResult,
-  ProblemKind,
   ProductionData,
   QuadraticData,
 } from "../engine/types";
@@ -15,7 +15,6 @@ export interface Scenario {
   valueLabel: string;
   valueUnit: string;
   variableNames: string[];
-  resourceNames: string[];
   config: CalculationConfig;
   updatedAt: string;
   snapshot?: {
@@ -26,11 +25,92 @@ export interface Scenario {
 }
 
 export const STORAGE_KEY = "param-game-2-workspace-v1";
-export function defaultConfig(
-  kind: ProblemKind = "production",
+export const MAX_VARIABLES = 6;
+export const MAX_CONSTRAINTS = 21;
+
+type LegacyConfig = Omit<CalculationConfig, "kind"> & {
+  kind: "production";
+  production: ProductionData;
+};
+
+type Preset = "example" | "quadratic";
+
+function toQuadratic(
+  config: CalculationConfig | LegacyConfig,
 ): CalculationConfig {
+  if (config.kind === "quadratic") return config;
+  const { production: p, ...settings } = config;
+  const identity = p.M.map((row, i) => row.map((_, j) => (i === j ? 1 : 0)));
+  const dot = (a: number[], b: number[]) =>
+    a.reduce((sum, value, i) => sum + value * b[i], 0);
+  const columns = p.M.map((_, i) => p.R.map((row) => row[i]));
+  const transformed = columns.map((column) =>
+    p.H.map((row) => dot(row, column)),
+  );
+  const A = p.M.map((row, i) =>
+    row.map((value, j) => dot(columns[i], transformed[j]) - value),
+  );
+  // Only the symmetric part contributes to the quadratic form.
+  const symmetric = A.map((row, i) =>
+    row.map((value, j) => value / 2 + A[j][i] / 2),
+  );
   return {
-    kind,
+    ...settings,
+    kind: "quadratic",
+    nonnegative: true,
+    quadratic: {
+      A: symmetric,
+      b0: p.p0.map((value, i) => value - p.k[i] - dot(columns[i], p.r0)),
+      b1: p.p1.map((value, i) => value - dot(columns[i], p.r1)),
+      c0: p.v0,
+      c1: p.v1,
+      K: [...p.R, ...identity],
+      l0: [...p.resourceLimits, ...p.capacity0],
+      l1: [...p.R.map(() => 0), ...p.capacity1],
+    },
+  };
+}
+
+function defaultConfig(preset: Preset): CalculationConfig {
+  const config: CalculationConfig = {
+    kind: "quadratic",
+    quadratic: {
+      A: [
+        [-0.5, 0],
+        [0, -0.3],
+      ],
+      b0: [3, 2],
+      b1: [1, 0.8],
+      c0: 0,
+      c1: 0,
+      K: [
+        [0.2, 0.1],
+        [0.1, 0.2],
+        [1, 0],
+        [0, 1],
+        [0.05, 0.05],
+      ],
+      l0: [20, 15, 50, 50, 30],
+      l1: [0.5, 0.3, -1, 1, 0.2],
+    },
+    tStart: 1,
+    tEnd: 10,
+    points: 10,
+    degreeNumerator: 2,
+    degreeDenominator: 2,
+    enforceFeasibility: true,
+    sampling: "fixed",
+    maxPoints: 100,
+    pointStep: 10,
+    coefficientTolerance: 0.001,
+    weightX: preset === "example" ? 1 : 0.5,
+    weightValue: preset === "example" ? 0 : 0.5,
+    nonnegative: preset === "example",
+  };
+  if (preset === "quadratic") return config;
+  return toQuadratic({
+    ...config,
+    kind: "production",
     production: {
       M: [
         [0.7, 0],
@@ -57,59 +137,25 @@ export function defaultConfig(
       v0: -5,
       v1: -0.002,
     },
-    quadratic: {
-      A: [
-        [-0.5, 0],
-        [0, -0.3],
-      ],
-      b0: [3, 2],
-      b1: [1, 0.8],
-      c0: 0,
-      c1: 0,
-      K: [
-        [0.2, 0.1],
-        [0.1, 0.2],
-        [1, 0],
-        [0, 1],
-        [0.05, 0.05],
-      ],
-      l0: [20, 15, 50, 50, 30],
-      l1: [0.5, 0.3, -1, 1, 0.2],
-    },
-    tStart: 1,
-    tEnd: 10,
-    points: 10,
-    degreeNumerator: 2,
-    degreeDenominator: 2,
-    enforceFeasibility: kind === "production",
-    sampling: "fixed",
-    maxPoints: 100,
-    pointStep: 10,
-    coefficientTolerance: 0.001,
-    weightX: 1,
-    weightValue: 0,
-  };
+  });
 }
-export function createScenario(kind: ProblemKind = "production"): Scenario {
+
+export function createScenario(preset: Preset = "example"): Scenario {
   return {
     id: crypto.randomUUID(),
-    name:
-      kind === "production"
-        ? "Производственный план"
-        : "Общая квадратичная модель",
+    name: preset === "example" ? "Пример из ноутбука" : "Новая задача",
     notes: "",
-    parameter: "Параметр",
+    parameter: "t",
     parameterUnit: "",
-    valueLabel: kind === "production" ? "Прибыль" : "Целевая функция",
-    valueUnit: "ед.",
-    variableNames:
-      kind === "production"
-        ? ["Продукт 1", "Продукт 2"]
-        : ["Переменная 1", "Переменная 2"],
-    resourceNames: ["Ресурс 1", "Ресурс 2", "Ресурс 3"],
-    config: defaultConfig(kind),
+    valueLabel: "f(x, t)",
+    valueUnit: "",
+    variableNames: ["x₁", "x₂"],
+    config: defaultConfig(preset),
     updatedAt: new Date().toISOString(),
   };
+}
+export function variableName(index: number) {
+  return "x" + "₀₁₂₃₄₅₆₇₈₉"[index + 1];
 }
 export const fingerprint = (s: Scenario) => JSON.stringify(s.config);
 export const isCurrent = (s: Scenario) =>
@@ -217,12 +263,12 @@ function sizedArray(
 }
 function parseQuadratic(
   value: unknown,
-  maxRows = 15,
-  coefficientLimit = 1e12,
+  maxRows = MAX_CONSTRAINTS,
+  coefficientLimit = 1e38,
 ): QuadraticData {
   const q = record(value, "Квадратичная модель");
-  const n = sizedArray(q.A, "Матрица A", 1, 6).length;
-  const m = sizedArray(q.K, "Матрица K", 1, maxRows).length;
+  const n = sizedArray(q.A, "Матрица A", 1, MAX_VARIABLES).length;
+  const m = sizedArray(q.K, "Матрица K", 0, maxRows).length;
   return {
     A: matrix(q.A, n, n, "Матрица A", coefficientLimit),
     b0: vector(q.b0, n, "Вектор b₀", coefficientLimit),
@@ -236,7 +282,7 @@ function parseQuadratic(
 }
 function parseProduction(value: unknown): ProductionData {
   const p = record(value, "Производственная модель");
-  const n = sizedArray(p.M, "Матрица M", 1, 6).length;
+  const n = sizedArray(p.M, "Матрица M", 1, MAX_VARIABLES).length;
   const m = sizedArray(p.R, "Матрица R", 1, 15).length;
   return {
     M: matrix(p.M, n, n, "Матрица M"),
@@ -254,16 +300,49 @@ function parseProduction(value: unknown): ProductionData {
     v1: finite(p.v1, "Коэффициент v₁"),
   };
 }
-function parseConfig(value: unknown, strict = true): CalculationConfig {
+function parseExpressions(
+  value: unknown,
+  n: number,
+  m: number,
+): CoefficientExpressions {
+  const data = record(value, "Выражения коэффициентов");
+  const expressions = (values: unknown, size: number, label: string) =>
+    Array.from(sizedArray(values, label, size, size), (value) =>
+      text(value, label, 2000),
+    );
+  const rows = (values: unknown, size: number, label: string) =>
+    Array.from(sizedArray(values, label, size, size), (row) =>
+      expressions(row, n, label),
+    );
+  return {
+    A: rows(data.A, n, "A(t)"),
+    b: expressions(data.b, n, "b(t)"),
+    c: text(data.c, "c(t)", 2000),
+    K: rows(data.K, m, "K(t)"),
+    l: expressions(data.l, m, "l(t)"),
+  };
+}
+function parseConfig(
+  value: unknown,
+  strict = true,
+): CalculationConfig | LegacyConfig {
   const c = record(value, "Параметры расчёта");
   if (c.kind !== "production" && c.kind !== "quadratic")
     throw new Error("Неизвестный тип модели.");
   if (c.sampling !== "fixed" && c.sampling !== "adaptive")
     throw new Error("Неизвестный способ выбора сетки.");
+  if (
+    c.coefficientMode !== undefined &&
+    c.coefficientMode !== "affine" &&
+    c.coefficientMode !== "rational"
+  )
+    throw new Error("Неизвестный режим ввода коэффициентов.");
+  const q = parseQuadratic(c.quadratic);
+  if (c.coefficientMode === "rational" && c.expressions === undefined)
+    throw new Error("Заполните формулы коэффициентов.");
   const result: CalculationConfig = {
-    kind: c.kind,
-    production: parseProduction(c.production),
-    quadratic: parseQuadratic(c.quadratic),
+    kind: "quadratic",
+    quadratic: q,
     tStart: finite(c.tStart, "Начало диапазона", 1e9),
     tEnd: finite(c.tEnd, "Конец диапазона", 1e9),
     points: integer(c.points, "Число точек", 2, 501),
@@ -284,6 +363,15 @@ function parseConfig(value: unknown, strict = true): CalculationConfig {
     ),
     weightX: finite(c.weightX, "Вес ошибки переменных"),
     weightValue: finite(c.weightValue, "Вес ошибки цели"),
+    ...(c.nonnegative !== undefined && {
+      nonnegative: flag(c.nonnegative, "Границы x ≥ 0"),
+    }),
+    ...(c.coefficientMode !== undefined && {
+      coefficientMode: c.coefficientMode,
+    }),
+    ...(c.expressions !== undefined && {
+      expressions: parseExpressions(c.expressions, q.A.length, q.K.length),
+    }),
   };
   if (strict && result.tStart >= result.tEnd)
     throw new Error("Начало диапазона должно быть меньше конца.");
@@ -303,6 +391,13 @@ function parseConfig(value: unknown, strict = true): CalculationConfig {
     result.maxPoints <= result.points
   )
     throw new Error("Максимум точек должен быть больше начального числа.");
+  if (c.kind === "production")
+    return {
+      ...result,
+      kind: "production",
+      production: parseProduction(c.production),
+    };
+  if (c.production !== undefined) parseProduction(c.production);
   return result;
 }
 function names(
@@ -332,20 +427,22 @@ function parseSnapshot(value: unknown): Scenario["snapshot"] {
     const s = record(value, "Сохранённый расчёт");
     const storedFingerprint = text(s.fingerprint, "Данные расчёта", 100000);
     const sourceConfig = parseConfig(JSON.parse(storedFingerprint), false);
-    const n =
-      sourceConfig.kind === "production"
-        ? sourceConfig.production.M.length
-        : sourceConfig.quadratic.A.length;
-    const m =
-      sourceConfig.kind === "production"
-        ? sourceConfig.production.R.length + 2 * n
-        : sourceConfig.quadratic.K.length;
+    const config = toQuadratic(sourceConfig);
+    const n = config.quadratic.A.length;
+    const m = config.quadratic.K.length;
+    const savedRows = sourceConfig.kind === "production" ? m + n : m;
     const raw = record(s.result, "Результат");
-    const canonical = parseQuadratic(raw.canonical, 27, Number.MAX_VALUE);
-    if (canonical.A.length !== n || canonical.K.length !== m)
+    const saved = parseQuadratic(raw.canonical, 27, Number.MAX_VALUE);
+    if (saved.A.length !== n || saved.K.length !== savedRows)
       throw new Error(
         "Размерность сохранённого расчёта отличается от исходных данных.",
       );
+    const canonical = {
+      ...saved,
+      K: saved.K.slice(0, m),
+      l0: saved.l0.slice(0, m),
+      l1: saved.l1.slice(0, m),
+    };
     const samples = sizedArray(raw.samples, "Расчётные точки", 2, 501).map(
       (item) => {
         const point = record(item, "Расчётная точка");
@@ -367,7 +464,26 @@ function parseSnapshot(value: unknown): Scenario["snapshot"] {
           t: finite(point.t, "Параметр расчётной точки", 1e9),
           x: vector(point.x, n, "Численный план", Number.MAX_VALUE),
           value: finite(point.value, "Численный результат", Number.MAX_VALUE),
-          slack: vector(point.slack, m, "Запасы ограничений", Number.MAX_VALUE),
+          slack: vector(
+            point.slack,
+            savedRows,
+            "Остатки ограничений",
+            Number.MAX_VALUE,
+          ).slice(0, m),
+          ...(config.coefficientMode === "rational" && {
+            constraintLeft: vector(
+              point.constraintLeft,
+              m,
+              "Левые части",
+              Number.MAX_VALUE,
+            ),
+            constraintRight: vector(
+              point.constraintRight,
+              m,
+              "Правые части",
+              Number.MAX_VALUE,
+            ),
+          }),
           maxViolation: nonnegative(
             point.maxViolation,
             "Нарушение ограничений",
@@ -503,8 +619,18 @@ function parseSnapshot(value: unknown): Scenario["snapshot"] {
     if (convergence.at(-1)!.points !== samples.length)
       throw new Error("История сетки не соответствует результату.");
     return {
-      fingerprint: JSON.stringify(sourceConfig),
-      result: { samples, curve, fits, canonical, diagnostics, convergence },
+      fingerprint: JSON.stringify(config),
+      result: {
+        samples,
+        curve,
+        fits,
+        canonical,
+        diagnostics,
+        convergence,
+        ...(config.coefficientMode === "rational" && {
+          argumentCenter: finite(raw.argumentCenter, "Центр приближения", 1e9),
+        }),
+      },
       calculatedAt: date(s.calculatedAt, "Дата расчёта"),
     };
   } catch {
@@ -513,26 +639,35 @@ function parseSnapshot(value: unknown): Scenario["snapshot"] {
 }
 export function parseScenario(data: unknown, strict = true): Scenario {
   const s = record(data, "Модель");
-  const config = parseConfig(s.config, strict);
-  const n =
-    config.kind === "production"
-      ? config.production.M.length
-      : config.quadratic.A.length;
-  const resources =
-    config.kind === "production" ? config.production.R.length : 0;
+  const source = parseConfig(s.config, strict);
+  const config = toQuadratic(source);
+  const n = config.quadratic.A.length;
+  const legacy = source.kind === "production";
+  const name = text(s.name, "Название модели", 200);
+  const variableNames = names(
+    s.variableNames,
+    "Названия переменных",
+    n,
+    MAX_VARIABLES,
+  );
   return {
     id:
       s.id === undefined
         ? crypto.randomUUID()
         : text(s.id, "Идентификатор модели", 200),
-    name: text(s.name, "Название модели", 200),
+    name: legacy
+      ? name.replace(/^Производственный план/, "Пример из ноутбука")
+      : name,
     notes: text(s.notes, "Примечание", 1000, ""),
     parameter: text(s.parameter, "Название параметра", 80, "Параметр"),
     parameterUnit: text(s.parameterUnit, "Единицы параметра", 40, ""),
-    valueLabel: text(s.valueLabel, "Название результата", 80, "Результат"),
-    valueUnit: text(s.valueUnit, "Единицы результата", 40, "ед."),
-    variableNames: names(s.variableNames, "Названия переменных", n, 6),
-    resourceNames: names(s.resourceNames, "Названия ресурсов", resources, 15),
+    valueLabel: legacy
+      ? "f(x, t)"
+      : text(s.valueLabel, "Название результата", 80, "f(x, t)"),
+    valueUnit: legacy ? "" : text(s.valueUnit, "Единицы результата", 40, ""),
+    variableNames: legacy
+      ? variableNames.map((_, i) => variableName(i))
+      : variableNames,
     config,
     updatedAt:
       s.updatedAt === undefined
@@ -544,7 +679,7 @@ export function parseScenario(data: unknown, strict = true): Scenario {
 export function exportScenario(s: Scenario) {
   download(
     JSON.stringify({ app: "param-game-2", version: 1, scenario: s }, null, 2),
-    "planning-model.json",
+    "qp-model.json",
     "application/json",
   );
 }

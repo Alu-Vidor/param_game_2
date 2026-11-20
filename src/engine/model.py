@@ -38,7 +38,7 @@ def _integer(value, name, minimum, maximum):
     return int(result)
 
 
-def _array(value, name, shape=None):
+def _array(value, name, shape=None, limit=1e12):
     try:
         result = np.asarray(value, dtype=float)
     except (TypeError, ValueError, OverflowError):
@@ -47,8 +47,8 @@ def _array(value, name, shape=None):
         raise ValueError(f"{name}: ожидается размерность {' × '.join(map(str, shape))}.")
     if not np.all(np.isfinite(result)):
         raise ValueError(f"{name}: все коэффициенты должны быть конечными числами.")
-    if result.size and np.max(np.abs(result)) > 1e12:
-        raise ValueError(f"{name}: модуль коэффициентов не должен превышать 10¹².")
+    if result.size and np.max(np.abs(result)) > limit:
+        raise ValueError(f"{name}: модуль коэффициентов не должен превышать {limit:g}.")
     return result
 
 
@@ -57,22 +57,24 @@ def canonical_problem(config):
     kind = config.get("kind")
     if kind == "quadratic":
         data = config.get("quadratic", {})
-        A = _array(data.get("A"), "Матрица A")
+        A = _array(data.get("A"), "Матрица A", limit=1e38)
         if A.ndim != 2 or A.shape[0] != A.shape[1] or not 1 <= A.shape[0] <= 6:
             raise ValueError("Матрица A должна быть квадратной: от 1 до 6 переменных.")
         n = A.shape[0]
-        K = _array(data.get("K"), "Матрица K")
-        if K.ndim != 2 or K.shape[1] != n or not 1 <= K.shape[0] <= 15:
-            raise ValueError("Матрица K: от 1 до 15 ограничений, по коэффициенту на переменную.")
+        K = _array(data.get("K"), "Матрица K", limit=1e38)
+        if K.shape == (0,):
+            K = K.reshape(0, n)
+        if K.ndim != 2 or K.shape[1] != n or not 0 <= K.shape[0] <= 21:
+            raise ValueError("Матрица K: от 0 до 21 ограничения, по коэффициенту на переменную.")
         m = K.shape[0]
         problem = {
             "A": A, "K": K,
-            "b0": _array(data.get("b0"), "Вектор b₀", (n,)),
-            "b1": _array(data.get("b1"), "Вектор b₁", (n,)),
+            "b0": _array(data.get("b0"), "Вектор b₀", (n,), limit=1e38),
+            "b1": _array(data.get("b1"), "Вектор b₁", (n,), limit=1e38),
             "c0": _finite(data.get("c0"), "Коэффициент c₀"),
             "c1": _finite(data.get("c1"), "Коэффициент c₁"),
-            "l0": _array(data.get("l0"), "Вектор l₀", (m,)),
-            "l1": _array(data.get("l1"), "Вектор l₁", (m,)),
+            "l0": _array(data.get("l0"), "Вектор l₀", (m,), limit=1e38),
+            "l1": _array(data.get("l1"), "Вектор l₁", (m,), limit=1e38),
         }
     elif kind == "production":
         data = config.get("production", {})
@@ -107,18 +109,25 @@ def canonical_problem(config):
         }
     else:
         raise ValueError("Выберите производственную или общую квадратичную модель.")
+    return check_problem(problem)
+
+
+def check_problem(problem, t=None, check_concavity=True):
     # The skew-symmetric part contributes exactly zero to x.T @ A @ x.
-    problem["A"] = (problem["A"] + problem["A"].T) / 2
+    problem["A"] = problem["A"] / 2 + problem["A"].T / 2
     for name, value in problem.items():
         if not np.all(np.isfinite(value)):
             raise ValueError(f"{name}: коэффициенты модели привели к переполнению.")
+    if not check_concavity:
+        return problem, None
     eigenvalues = np.linalg.eigvalsh(problem["A"])
     max_eigenvalue = float(eigenvalues[-1])
     # A large negative eigenvalue must never mask a resolved positive one.
     # Reject positive values conservatively, including numerically ambiguous
     # matrices, rather than advertise a global maximum of a nonconcave form.
     if max_eigenvalue > 0:
-        raise ValueError("Целевая функция не вогнута: симметричная часть A имеет положительное собственное значение. Для этой модели глобальный максимум методом из приложения не подтверждается.")
+        prefix = "" if t is None else f"При t={t:.8g}: "
+        raise ValueError(prefix + "целевая функция не вогнута: симметричная часть A имеет положительное собственное значение.")
     return problem, max_eigenvalue
 
 
@@ -138,7 +147,7 @@ def _settings(config):
     tolerance = _finite(config.get("coefficientTolerance"), "Точность коэффициентов")
     if tolerance <= 0:
         raise ValueError("Точность коэффициентов должна быть положительной.")
-    wx = _finite(config.get("weightX"), "Вес ошибки плана")
+    wx = _finite(config.get("weightX"), "Вес ошибки решения")
     wf = _finite(config.get("weightValue"), "Вес ошибки целевой функции")
     if min(wx, wf) < 0 or max(wx, wf) <= 0:
         raise ValueError("Веса неотрицательны; хотя бы один вес должен быть положительным.")
@@ -151,7 +160,7 @@ def _settings(config):
         counts = list(range(points, maximum + 1, step))
         if counts[-1] != maximum:
             counts.append(maximum)
-    return start, end, counts, p, q, tolerance, wx, wf
+    return start, end, counts, p, q, tolerance, wx / (wx + wf), wf / (wx + wf)
 
 
 def _value(problem, x, t):
@@ -163,9 +172,18 @@ def _primal_tolerance(left, right, relative=1e-9, absolute=1e-9):
     return absolute + relative * np.maximum(np.abs(left), np.abs(right))
 
 
-def _is_feasible(problem, x, t):
-    left = np.concatenate((problem["K"] @ x, -x))
-    right = np.concatenate((problem["l0"] + t * problem["l1"], np.zeros(len(x))))
+def _all_inequalities(problem, t, nonnegative):
+    K = problem["K"]
+    l = problem["l0"] + t * problem["l1"]
+    if nonnegative:
+        n = K.shape[1]
+        return np.vstack((K, -np.eye(n))), np.concatenate((l, np.zeros(n)))
+    return K, l
+
+
+def _is_feasible(problem, x, t, nonnegative=True):
+    K, right = _all_inequalities(problem, t, nonnegative)
+    left = K @ x
     return bool(np.all(left - right <= _primal_tolerance(left, right)))
 
 
@@ -176,12 +194,10 @@ def _scaled_inequalities(problem, t):
     return K / row_scale[:, None], (problem["l0"] + t * problem["l1"]) / row_scale
 
 
-def kkt_diagnostics(problem, x, t):
+def kkt_diagnostics(problem, x, t, nonnegative=True):
     """KKT certificate for Kx <= l and every x >= 0 bound."""
-    n = len(x)
     l = problem["l0"] + t * problem["l1"]
-    C = np.vstack((problem["K"], -np.eye(n)))
-    right = np.concatenate((l, np.zeros(n)))
+    C, right = _all_inequalities(problem, t, nonnegative)
     left = C @ x
     slack = right - left
     b = problem["b0"] + t * problem["b1"]
@@ -208,7 +224,7 @@ def kkt_diagnostics(problem, x, t):
     derivative_terms = 2 * np.abs(problem["A"]) @ np.abs(x) + np.abs(b)
     stationarity_tolerance = 1e-8 * np.abs(gradient) + 64 * np.finfo(float).eps * derivative_terms
     complementarity = np.abs(multiplier * slack)
-    violation = max(0.0, float(np.max(-slack)))
+    violation = max(0.0, float(np.max(-slack, initial=0.0)))
     ok = (np.all(-slack <= primal_tolerance)
           and np.all(stationarity_residual <= stationarity_tolerance)
           and np.all(complementarity <= 1e-8 * (1 + np.abs(multiplier))))
@@ -218,11 +234,19 @@ def kkt_diagnostics(problem, x, t):
     }
 
 
-def solve_qp(problem, t, previous=None):
+def solve_qp(problem, t, previous=None, nonnegative=True):
     A, K = problem["A"], problem["K"]
     b = problem["b0"] + t * problem["b1"]
     l = problem["l0"] + t * problem["l1"]
     n = len(b)
+    bounds = [(0 if nonnegative else None, None)] * n
+
+    def clip(x):
+        return np.maximum(x, 0) if nonnegative else x
+
+    def diagnostics(x):
+        return kkt_diagnostics(problem, x, t, nonnegative)
+
     normal_K, normal_l = _scaled_inequalities(problem, t)
     eigenvalues = np.linalg.eigvalsh(A)
     needs_gap_check = eigenvalues[-1] >= -1e-10 * max(float(np.max(np.abs(eigenvalues))), np.finfo(float).tiny)
@@ -240,7 +264,7 @@ def solve_qp(problem, t, previous=None):
         if gradient_scale == 0:
             return True
         oracle = linprog(-gradient / gradient_scale, A_ub=normal_K, b_ub=normal_l,
-                         bounds=[(0, None)] * n, method="highs")
+                         bounds=bounds, method="highs")
         if not oracle.success:
             return False
         gap = float(gradient @ (oracle.x - x))
@@ -250,12 +274,12 @@ def solve_qp(problem, t, previous=None):
     if not np.any(A):
         objective_scale = max(float(np.max(np.abs(b))), np.finfo(float).tiny)
         linear = linprog(-b / objective_scale, A_ub=normal_K, b_ub=normal_l,
-                         bounds=[(0, None)] * n, method="highs")
+                         bounds=bounds, method="highs")
         if not linear.success:
             detail = "целевая функция не ограничена сверху" if linear.status == 3 else "ограничения несовместны"
-            raise ValueError(f"При t={t:.8g} {detail}; допустимый оптимальный план не найден.")
-        x = np.maximum(linear.x, 0)
-        check = kkt_diagnostics(problem, x, t)
+            raise ValueError(f"При t={t:.8g} {detail}; допустимый оптимум не найден.")
+        x = clip(linear.x)
+        check = diagnostics(x)
         if certified(x, check):
             return x, _value(problem, x, t), check
         raise ValueError(f"При t={t:.8g} решение не подтверждено: измените масштаб коэффициентов.")
@@ -264,38 +288,38 @@ def solve_qp(problem, t, previous=None):
         stationary = np.linalg.solve(2 * A, -b)
     except np.linalg.LinAlgError:
         stationary = np.linalg.lstsq(2 * A, -b, rcond=None)[0]
-    stationary_check = kkt_diagnostics(problem, stationary, t)
+    stationary_check = diagnostics(stationary)
     if certified(stationary, stationary_check):
-        x = np.maximum(stationary, 0)
-        return x, _value(problem, x, t), kkt_diagnostics(problem, x, t)
+        x = clip(stationary)
+        return x, _value(problem, x, t), diagnostics(x)
 
     def feasible(x):
-        return _is_feasible(problem, x, t)
+        return _is_feasible(problem, x, t, nonnegative)
 
     starts = []
     if previous is not None and feasible(previous):
-        starts.append(np.maximum(previous, 0))
+        starts.append(clip(previous))
     if feasible(np.zeros(n)):
         starts.append(np.zeros(n))
     else:
-        lp = linprog(np.zeros(n), A_ub=normal_K, b_ub=normal_l, bounds=[(0, None)] * n, method="highs")
+        lp = linprog(np.zeros(n), A_ub=normal_K, b_ub=normal_l, bounds=bounds, method="highs")
         if not lp.success:
-            raise ValueError(f"При t={t:.8g} ограничения несовместны: допустимый план не найден.")
+            raise ValueError(f"При t={t:.8g} ограничения несовместны: допустимая точка не найдена.")
         starts.append(lp.x)
-    starts.append(np.maximum(stationary, 0))
+    starts.append(clip(stationary))
     objective_scale = max(float(np.max(np.abs(A))), float(np.max(np.abs(b))), np.finfo(float).tiny)
     for initial in starts[:3]:
         result = minimize(
             lambda x: -(x @ A @ x + b @ x) / objective_scale, initial,
             jac=lambda x: -(2 * A @ x + b) / objective_scale,
-            constraints={"type": "ineq", "fun": lambda x: normal_l - normal_K @ x, "jac": lambda x: -normal_K},
-            bounds=[(0, None)] * n, method="SLSQP",
+            constraints=[{"type": "ineq", "fun": lambda x: normal_l - normal_K @ x, "jac": lambda x: -normal_K}] if len(K) else [],
+            bounds=bounds, method="SLSQP",
             options={"maxiter": 1000, "ftol": 1e-11},
         )
         if not np.all(np.isfinite(result.x)):
             continue
-        x = np.maximum(result.x, 0)
-        check = kkt_diagnostics(problem, x, t)
+        x = clip(result.x)
+        check = diagnostics(x)
         value = _value(problem, x, t)
         if certified(x, check):
             return x, value, check
@@ -350,22 +374,89 @@ def evaluate_fits(fits, t):
     return np.asarray(values)
 
 
-def fit_rational(problem, ts, exact, values, p, q, enforce, wx, wf, deadline):
+def rational_problem_factory(functions, n, m, start, end):
+    """Compile the checked coefficient arrays into a numeric problem at t."""
+    def function(entry, label):
+        try:
+            num = _array(entry["numerator"], "Числитель " + label, limit=1e38)
+            den = _array(entry["denominator"], "Знаменатель " + label, limit=1e38)
+        except (TypeError, KeyError):
+            raise ValueError(f"{label}: ожидались коэффициенты рациональной функции.") from None
+        if any(a.ndim != 1 or not 1 <= len(a) <= 13 for a in (num, den)):
+            raise ValueError(f"{label}: допустима степень от 0 до 12.")
+        scale = np.max(np.abs(den))
+        if scale == 0:
+            raise ValueError(f"{label}: знаменатель тождественно равен нулю.")
+        num, den = num / scale, den / scale
+        if not np.all(np.isfinite(num)):
+            raise ValueError(f"{label}: слишком большой масштаб коэффициентов.")
+        roots = denominator_roots([{"denominator": den.tolist()}], start, end)
+        if roots:
+            raise ValueError(f"{label}: ноль или слишком малый знаменатель на интервале при t≈{roots[0]:.8g}.")
+        return num, den, label
+
+    def vector(entries, size, label):
+        if not isinstance(entries, list) or len(entries) != size:
+            raise ValueError(f"{label}: ожидается {size} элементов.")
+        return [function(entry, f"{label}[{i + 1}]") for i, entry in enumerate(entries)]
+
+    def matrix(entries, rows, cols, label):
+        if not isinstance(entries, list) or len(entries) != rows:
+            raise ValueError(f"{label}: ожидается {rows} строк.")
+        return [vector(row, cols, f"{label}, строка {i + 1}") for i, row in enumerate(entries)]
+
+    if not isinstance(functions, dict):
+        raise ValueError("Не удалось прочитать рациональные коэффициенты.")
+    A = matrix(functions.get("A"), n, n, "A")
+    K = matrix(functions.get("K"), m, n, "K")
+    b = vector(functions.get("b"), n, "b")
+    l = vector(functions.get("l"), m, "l")
+    c = function(functions.get("c"), "c")
+
+    def at(t, check_concavity=True):
+        def get(entry):
+            num, den, label = entry
+            denominator = np.polynomial.polynomial.polyval(t, den)
+            scale = np.polynomial.polynomial.polyval(abs(t), np.abs(den))
+            if abs(denominator) <= 1e-10 * max(1, scale):
+                raise ValueError(f"{label}: слишком малый знаменатель при t={t:.8g}.")
+            value = np.polynomial.polynomial.polyval(t, num) / denominator
+            if not np.isfinite(value) or abs(value) > 1e100:
+                raise ValueError(f"{label}: слишком большое значение при t={t:.8g}.")
+            return float(value)
+
+        return check_problem({
+            "A": np.array([[get(value) for value in row] for row in A]),
+            "K": np.array([[get(value) for value in row] for row in K]).reshape(m, n),
+            "b0": np.array([get(value) for value in b]), "b1": np.zeros(n),
+            "c0": get(c), "c1": 0.0,
+            "l0": np.array([get(value) for value in l]), "l1": np.zeros(m),
+        }, t, check_concavity=check_concavity)
+
+    return at
+
+
+def fit_rational(problem, ts, exact, values, p, q, enforce, wx, wf, deadline, nonnegative=True, node_problems=None, center=0.0):
     """Fit the notebook's rational family with an analytic Jacobian.
 
-    u=t/scale only conditions the coefficient search. Returned coefficients are
-    in powers of t, with denominator constant exactly one.
+    The numerical basis uses (t - center) / scale. Returned coefficients are
+    in powers of (t - center), with denominator constant exactly one.
     """
     n = exact.shape[1]
     count = p + 1 + q
-    scale = max(1.0, float(np.max(np.abs(ts))))
-    u = ts / scale
+    scale = max(1.0, float(np.max(np.abs(ts - center))))
+    u = (ts - center) / scale
     numerator_basis = np.vander(u, p + 1, increasing=True)
     denominator_basis = np.vander(u, q + 1, increasing=True)[:, 1:]
-    bt = problem["b0"][None, :] + ts[:, None] * problem["b1"][None, :]
-    ct = problem["c0"] + ts * problem["c1"]
-    C = np.vstack((problem["K"], -np.eye(n)))
-    right = np.column_stack((problem["l0"][None, :] + ts[:, None] * problem["l1"][None, :], np.zeros((len(ts), n))))
+    if node_problems is None:
+        node_problems = [problem] * len(ts)
+    A = np.stack([node["A"] for node in node_problems])
+    bt = np.stack([node["b0"] + t * node["b1"] for node, t in zip(node_problems, ts)])
+    ct = np.array([node["c0"] + t * node["c1"] for node, t in zip(node_problems, ts)])
+    constraints = [_all_inequalities(node, t, nonnegative) for node, t in zip(node_problems, ts)]
+    C = np.stack([left for left, _ in constraints])
+    right = np.stack([bound for _, bound in constraints])
+    enforce = enforce and C.shape[1] > 0
     loss_scale = max(1.0, wx * float(np.sum(exact**2)) + wf * float(np.sum(values**2)))
 
     def calculate(D, jacobian=False, check_time=True):
@@ -391,23 +482,23 @@ def fit_rational(problem, ts, exact, values, p, q, enforce, wx, wf, deadline):
     def loss_and_gradient(D, check_time=True):
         x, J = calculate(D, True, check_time)
         error_x = x - exact
-        approx_value = np.einsum("ti,ij,tj->t", x, problem["A"], x) + np.sum(bt * x, axis=1) + ct
+        approx_value = np.einsum("ti,tij,tj->t", x, A, x) + np.sum(bt * x, axis=1) + ct
         error_f = approx_value - values
         loss = wx * np.sum(error_x**2) + wf * np.sum(error_f**2)
-        direction = wx * error_x + wf * error_f[:, None] * (2 * x @ problem["A"] + bt)
+        direction = wx * error_x + wf * error_f[:, None] * (2 * np.einsum("tij,tj->ti", A, x) + bt)
         gradient = 2 * np.einsum("ti,tij->j", direction, J)
         return float(loss / loss_scale), gradient / loss_scale
 
     def constraint(D):
-        return (right - calculate(D) @ C.T).ravel()
+        return (right - np.einsum("tmi,ti->tm", C, calculate(D))).ravel()
 
     def fit_feasible(D):
-        left = calculate(D) @ C.T
+        left = np.einsum("tmi,ti->tm", C, calculate(D))
         return bool(np.all(left - right <= _primal_tolerance(left, right)))
 
     def constraint_jacobian(D):
         _, J = calculate(D, True)
-        return -np.einsum("mi,tij->tmj", C, J).reshape(-1, n * count)
+        return -np.einsum("tmi,tij->tmj", C, J).reshape(-1, n * count)
 
     initial = np.zeros((n, count))
     # np.linalg.lstsq returns ascending coefficients because the basis is so.
@@ -476,8 +567,24 @@ def run_calculation(config, report_progress=None):
     deadline = start_time + 55
     if not isinstance(config, dict):
         raise ValueError("Не удалось прочитать параметры модели.")
-    problem, max_eigenvalue = canonical_problem(config)
     start, end, counts, p, q, tolerance, wx, wf = _settings(config)
+    nonnegative = config.get("nonnegative", True)
+    if not isinstance(nonnegative, bool):
+        raise ValueError("Проверьте настройку границ x ≥ 0.")
+    coefficients = config.get("coefficientFunctions")
+    if config.get("coefficientMode") == "rational":
+        data = config.get("quadratic", {})
+        n = len(data.get("A", []))
+        m = len(data.get("K", []))
+        if not 1 <= n <= 6 or not 0 <= m <= 21:
+            raise ValueError("Задайте от 1 до 6 переменных и от 0 до 21 строки K.")
+        at = rational_problem_factory(coefficients, n, m, start, end)
+        problem, max_eigenvalue = at(start)
+    else:
+        problem, max_eigenvalue = canonical_problem(config)
+        at = None
+
+    center = start / 2 + end / 2 if at else 0.0
     messages = []
     convergence = []
     previous_coefficients = None
@@ -492,13 +599,21 @@ def run_calculation(config, report_progress=None):
     for iteration, point_count in enumerate(counts):
         ts = np.linspace(start, end, point_count)
         samples, xs, values = [], [], []
+        nodes = []
         previous = None
         try:
             for i, t in enumerate(ts):
                 if time.perf_counter() > deadline:
                     raise CalculationTimeout()
-                x, value, check = solve_qp(problem, float(t), previous)
-                samples.append({"t": float(t), "x": x.tolist(), "value": value, **check, "xApprox": None, "valueApprox": None})
+                node, eigenvalue = at(float(t)) if at else (problem, max_eigenvalue)
+                max_eigenvalue = max(max_eigenvalue, eigenvalue)
+                x, value, check = solve_qp(node, float(t), previous, nonnegative)
+                sample = {"t": float(t), "x": x.tolist(), "value": value, **check, "xApprox": None, "valueApprox": None}
+                if at:
+                    sample["constraintLeft"] = (node["K"] @ x).tolist()
+                    sample["constraintRight"] = node["l0"].tolist()
+                samples.append(sample)
+                nodes.append(node)
                 xs.append(x)
                 values.append(value)
                 previous = x
@@ -507,11 +622,11 @@ def run_calculation(config, report_progress=None):
             progress(f"Подбираем рациональные функции: {point_count} точек", .18 + .7 * (iteration + .6) / len(counts))
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", RuntimeWarning)
-                fits, loss, fit_success, timed_out = fit_rational(problem, ts, np.asarray(xs), np.asarray(values), p, q, config["enforceFeasibility"], wx, wf, deadline)
+                fits, loss, fit_success, timed_out = fit_rational(problem, ts, np.asarray(xs), np.asarray(values), p, q, config["enforceFeasibility"], wx, wf, deadline, nonnegative=nonnegative, node_problems=nodes, center=center)
             coefficients = _coefficient_vector(fits)
             change = None if previous_coefficients is None else float(np.max(np.abs(coefficients - previous_coefficients)))
             convergence.append({"points": point_count, "coefficientChange": change, "loss": loss})
-            final = samples, fits, loss, fit_success, timed_out
+            final = samples, fits, loss, fit_success, nodes
             if converged is not None and change is not None and change < tolerance and fit_success and previous_fit_success:
                 converged = True
                 break
@@ -525,18 +640,18 @@ def run_calculation(config, report_progress=None):
                 raise ValueError("Расчёт превысил минуту. Уменьшите число точек или степень аппроксимации.") from None
             messages.append("Лимит времени достигнут. Сохранена последняя полностью рассчитанная сетка.")
             break
-    samples, fits, loss, fit_success, timed_out = final
-    pole_roots = denominator_roots(fits, start, end)
+    samples, fits, loss, fit_success, nodes = final
+    pole_roots = [root + center for root in denominator_roots(fits, start - center, end - center)]
     denominator_safe = not pole_roots
     max_x_error, max_value_error, max_sample_violation = 0.0, 0.0, 0.0
     invalid_sample = False
-    for sample in samples:
-        approximation = evaluate_fits(fits, sample["t"])
+    for sample, node in zip(samples, nodes):
+        approximation = evaluate_fits(fits, sample["t"] - center)
         if approximation is None:
             invalid_sample = True
             denominator_safe = False
             continue
-        approximate_value = _value(problem, approximation, sample["t"])
+        approximate_value = _value(node, approximation, sample["t"])
         if not np.isfinite(approximate_value):
             invalid_sample = True
             continue
@@ -544,27 +659,29 @@ def run_calculation(config, report_progress=None):
         sample["valueApprox"] = approximate_value
         max_x_error = max(max_x_error, float(np.max(np.abs(approximation - np.asarray(sample["x"])))))
         max_value_error = max(max_value_error, abs(approximate_value - sample["value"]))
-        max_sample_violation = max(max_sample_violation, kkt_diagnostics(problem, approximation, sample["t"])["maxViolation"])
+        max_sample_violation = max(max_sample_violation, kkt_diagnostics(node, approximation, sample["t"], nonnegative)["maxViolation"])
     curve_times = set(np.linspace(start, end, max(201, len(samples))).tolist())
     curve_times.update(sample["t"] for sample in samples)
     curve_times.update(pole_roots)
     curve = []
     max_curve_violation = 0.0
     for t in sorted(curve_times):
-        x = evaluate_fits(fits, t)
+        x = evaluate_fits(fits, t - center)
         at_root = any(abs(t - root) <= 1e-10 * max(1.0, abs(end - start)) for root in pole_roots)
         if x is None or at_root:
             curve.append({"t": float(t), "xApprox": None, "valueApprox": None, "feasible": False, "maxViolation": None, "denominatorSafe": False})
             denominator_safe = False
             continue
-        violation = max(0.0, float(np.max(problem["K"] @ x - problem["l0"] - t * problem["l1"])), float(np.max(-x)))
-        value = _value(problem, x, t)
+        node = at(t, check_concavity=False)[0] if at else problem
+        C, right = _all_inequalities(node, t, nonnegative)
+        violation = float(np.max(C @ x - right, initial=0.0))
+        value = _value(node, x, t)
         if not np.isfinite(value):
             curve.append({"t": float(t), "xApprox": None, "valueApprox": None, "feasible": False, "maxViolation": None, "denominatorSafe": False})
             denominator_safe = False
             continue
         max_curve_violation = max(max_curve_violation, violation)
-        curve.append({"t": float(t), "xApprox": x.tolist(), "valueApprox": value, "feasible": _is_feasible(problem, x, t), "maxViolation": violation, "denominatorSafe": True})
+        curve.append({"t": float(t), "xApprox": x.tolist(), "valueApprox": value, "feasible": _is_feasible(node, x, t, nonnegative), "maxViolation": violation, "denominatorSafe": True})
     if not all(sample["kkt"] for sample in samples):
         messages.append("Для части численных решений условия Куна — Таккера не подтверждены с заданным допуском.")
     if not fit_success:
@@ -574,7 +691,7 @@ def run_calculation(config, report_progress=None):
     if max_curve_violation > 1e-6:
         messages.append("Приближение нарушает ограничения хотя бы в одной проверенной точке диапазона.")
     if converged is False:
-        messages.append("Сходимость коэффициентов по ε не достигнута. Это не равнозначно большой ошибке самого плана.")
+        messages.append("Сходимость коэффициентов по ε не достигнута. Это не равнозначно большой ошибке решения.")
     if len(samples) < p + q + 1:
         messages.append("Число точек меньше числа коэффициентов одной функции: формула может быть неоднозначной.")
     fit_message = "Подбор коэффициентов завершён." if fit_success else "Сходимость подбора коэффициентов не подтверждена."
@@ -583,6 +700,7 @@ def run_calculation(config, report_progress=None):
     progress("Расчёт завершён", 1)
     return {
         "samples": samples, "curve": curve, "fits": fits,
+        **({"argumentCenter": center} if at else {}),
         "canonical": {name: value.tolist() if isinstance(value, np.ndarray) else float(value) for name, value in problem.items()},
         "diagnostics": {
             "concave": True, "maxEigenvalue": max_eigenvalue,

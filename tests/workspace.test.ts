@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
+import { parseCoefficient } from '../src/lib/coefficient';
 import type { CalculationResult } from '../src/engine/types';
 import { createScenario, fingerprint, isCurrent, loadWorkspace, number, parseScenario, resizeMatrix, resizeVector, scientific, STORAGE_KEY, type Scenario } from '../src/lib/workspace';
 
@@ -33,6 +34,42 @@ function withSnapshot(): Scenario {
   return scenario;
 }
 
+function legacyExample() {
+  const scenario = withSnapshot();
+  scenario.name = "Производственный план";
+  const production = {
+    M: [[.7, 0], [0, .5]], H: [[.1, 0, 0], [0, .1, 0], [0, 0, .1]],
+    R: [[.15, .03], [.05, .3], [.1, .06]], resourceLimits: [18, 11, 1],
+    capacity0: [8, 23], capacity1: [0, 0], k: [3, 4], p0: [20, 30], p1: [2, -.1],
+    r0: [3, 2, 6], r1: [2, .3, -.3], v0: -5, v1: -.002,
+  };
+  const q = clone(createScenario().config.quadratic);
+  q.K.push([-1, 0], [0, -1]);
+  q.l0.push(0, 0);
+  q.l1.push(0, 0);
+  if (scenario.snapshot) {
+    scenario.snapshot.result.canonical = q;
+    for (const row of scenario.snapshot.result.samples) row.slack.push(...row.x);
+  }
+  const config = { ...scenario.config, kind: "production", production };
+  if (scenario.snapshot) scenario.snapshot.fingerprint = JSON.stringify(config);
+  return { ...scenario, config };
+}
+
+test('a saved legacy example is converted without changing or losing the solution', () => {
+  const legacy = legacyExample();
+  const parsed = parseScenario(JSON.parse(JSON.stringify(legacy)));
+  const q = parsed.config.quadratic;
+  assert.equal(parsed.config.nonnegative, true);
+  assert.equal(parsed.name, "Пример из ноутбука");
+  assert.deepEqual(q.K, [[.15, .03], [.05, .3], [.1, .06], [1, 0], [0, 1]]);
+  assert.ok(Math.abs(q.A[0][0] + .6965) < 1e-14);
+  assert.ok(Math.abs(q.b1[0] - 1.715) < 1e-14);
+  assert.equal(parsed.snapshot?.result.samples[0].slack.length, 5);
+  assert.equal(isCurrent(parsed), true);
+  assert.equal(isCurrent(parseScenario(JSON.parse(JSON.stringify(parsed)))), true);
+});
+
 test('an exported scenario round-trips without retaining references to imported objects', () => {
   const source = withSnapshot();
   const exported = JSON.stringify({ app: 'param-game-2', version: 1, scenario: source });
@@ -45,13 +82,7 @@ test('an exported scenario round-trips without retaining references to imported 
 
 test('import rejects wrong matrix dimensions before the editor can index them', () => {
   const edits: Array<(s: Scenario) => void> = [
-    s => { s.config.production.R[0] = [.15]; },
-    s => { s.config.production.H = [[.1]]; },
-    s => { s.config.production.M = []; },
-    s => { s.config.production.resourceLimits.pop(); },
-    s => { s.config.production.p0 = [20]; },
     s => { s.variableNames = []; },
-    s => { s.resourceNames = ['Ресурс 1']; },
     s => { s.config.quadratic.K[0] = [1]; },
     s => { s.config.quadratic.b1.push(1); },
   ];
@@ -68,10 +99,10 @@ test('import validates inactive data and rejects non-numeric or non-finite coeff
     (bad.config.quadratic.b0 as unknown[])[0] = value;
     assert.throws(() => parseScenario(bad));
   }
-  const sparse = createScenario();
+  const sparse = legacyExample();
   sparse.config.production.R = Array(3);
   assert.throws(() => parseScenario(sparse));
-  const enormous = createScenario();
+  const enormous = legacyExample();
   enormous.config.production.M[0][0] = 1e13;
   assert.throws(() => parseScenario(enormous));
 });
@@ -92,7 +123,7 @@ test('import enforces supported dimensions and numerical settings', () => {
     s => { s.config.enforceFeasibility = 'yes' as never; },
     s => { s.config.sampling = 'adaptive'; s.config.maxPoints = s.config.points; },
     s => { s.config.quadratic.A = Array.from({ length: 7 }, () => Array(7).fill(0)); },
-    s => { s.config.production.R = Array.from({ length: 16 }, () => [0, 0]); },
+    s => { s.config.quadratic.K = Array.from({ length: 22 }, () => [0, 0]); },
   ];
   for (const edit of edits) {
     const bad = createScenario(); edit(bad);
@@ -104,7 +135,7 @@ test('negative coefficients and a negative parameter range remain valid input', 
   const source = createScenario();
   source.config.tStart = -10;
   source.config.tEnd = -1;
-  source.config.production.p1 = [-2, -3];
+  source.config.quadratic.b1 = [-2, -3];
   assert.deepEqual(parseScenario(source).config, source.config);
 });
 
@@ -153,7 +184,7 @@ test('loading corrupt storage preserves the original storage and reports recover
   const writes = storage('[{"name":"broken"}]');
   const loaded = loadWorkspace();
   assert.equal(loaded.scenarios.length, 1);
-  assert.equal(loaded.scenarios[0].config.kind, 'production');
+  assert.equal(loaded.scenarios[0].config.kind, 'quadratic');
   assert.ok(loaded.warning);
   assert.equal(writes(), 0);
 });
@@ -217,4 +248,13 @@ test('rounded display removes negative zero while raw data and scientific notati
   assert.equal(number(null), '—');
   assert.equal(scientific(raw), '-1.00 × 10⁻13');
   assert.equal(String(raw), '-1e-13');
+});
+
+test('coefficient input accepts polynomials and explicit rational fractions', () => {
+  assert.deepEqual(parseCoefficient('−1−t^2'), { numerator: [-1, 0, -1], denominator: [1] });
+  assert.deepEqual(parseCoefficient('(-1-t^2)/(1+0,5t)'), { numerator: [-1, 0, -1], denominator: [1, .5] });
+  assert.deepEqual(parseCoefficient('1/t'), { numerator: [1], denominator: [0, 1] });
+  assert.throws(() => parseCoefficient('1+t/(1+t)'));
+  assert.throws(() => parseCoefficient('1/(t-t)'));
+  assert.throws(() => parseCoefficient('Math.sin(t)'));
 });

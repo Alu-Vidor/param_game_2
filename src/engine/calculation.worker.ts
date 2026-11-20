@@ -57,7 +57,7 @@ async function getRuntime(id: string): Promise<PythonRuntime> {
 }
 
 self.onmessage = async (event: MessageEvent<CalculationRequest>) => {
-  const { id, config } = event.data;
+  const { id, config, coefficientFunctions } = event.data;
   if (busy) {
     send({
       type: "error",
@@ -70,7 +70,10 @@ self.onmessage = async (event: MessageEvent<CalculationRequest>) => {
   let runtime: PythonRuntime | undefined;
   try {
     runtime = await getRuntime(id);
-    runtime.globals.set("_config_json", JSON.stringify(config));
+    runtime.globals.set(
+      "_config_json",
+      JSON.stringify({ ...config, coefficientFunctions }),
+    );
     runtime.globals.set(
       "_report_progress",
       (stage: string, progress: number) => {

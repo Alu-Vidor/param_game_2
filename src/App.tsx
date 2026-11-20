@@ -1,21 +1,22 @@
+import {
+  compileExpressions,
+  type CoefficientFunctions,
+} from "./lib/coefficient";
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowUpRight,
   Check,
   CheckCheck,
-  CircleHelp,
   Copy,
   Download,
   FileInput,
-  FlaskConical,
   FolderOpen,
   GitBranch,
   Layers3,
   LoaderCircle,
   Play,
   Plus,
-  SlidersHorizontal,
   Square,
   Trash2,
   X,
@@ -24,7 +25,6 @@ import type {
   CalculationMessage,
   CalculationRequest,
   CalculationResult,
-  ProblemKind,
 } from "./engine/types";
 import Editor from "./components/Editor";
 import Results from "./components/Results";
@@ -42,29 +42,16 @@ import {
   type Scenario,
 } from "./lib/workspace";
 
-type View = "models" | "editor" | "results" | "method";
-type Detail = "charts" | "table" | "formulas";
+type View = "models" | "editor";
 function route() {
   const q = new URLSearchParams(location.search);
   return {
-    view: (["models", "editor", "results", "method"].includes(
-      q.get("view") || "",
-    )
-      ? q.get("view")
-      : "editor") as View,
+    view: (q.get("view") === "models" ? "models" : "editor") as View,
     id: q.get("model"),
-    detail: (["charts", "table", "formulas"].includes(q.get("detail") || "")
-      ? q.get("detail")
-      : "charts") as Detail,
   };
 }
 function formulaSize(s: Scenario) {
-  return s.config.kind === "production"
-    ? {
-        n: s.config.production.M.length,
-        m: s.config.production.resourceLimits.length,
-      }
-    : { n: s.config.quadratic.A.length, m: s.config.quadratic.K.length };
+  return { n: s.config.quadratic.A.length, m: s.config.quadratic.K.length };
 }
 
 export default function App() {
@@ -116,16 +103,11 @@ export default function App() {
   }, [view, current?.id]);
   useEffect(() => () => worker.current?.terminate(), []);
 
-  function navigate(
-    nextView: View,
-    id = current?.id,
-    detail = locationState.detail,
-  ) {
+  function navigate(nextView: View, id = current?.id) {
     const q = new URLSearchParams({ view: nextView });
     if (id) q.set("model", id);
-    if (nextView === "results") q.set("detail", detail);
-    history.pushState(null, "", `${location.pathname}?${q}`);
-    setLocationState({ view: nextView, id: id || null, detail });
+    history.pushState(null, "", location.pathname + "?" + q);
+    setLocationState({ view: nextView, id: id || null });
     setError("");
   }
   function update(next: Scenario) {
@@ -144,12 +126,11 @@ export default function App() {
     );
     return false;
   }
-  function create(kind: ProblemKind) {
+  function create(preset: Parameters<typeof createScenario>[0]) {
     if (!hasSpace()) return;
-    const next = createScenario(kind);
+    const next = createScenario(preset);
     setScenarios((all) => [next, ...all]);
     navigate("editor", next.id);
-    setNotice("Добавлен исходный пример. Измените данные под свою задачу.");
   }
   function duplicate(s: Scenario) {
     if (!hasSpace()) return;
@@ -196,12 +177,30 @@ export default function App() {
     if (form && !form.reportValidity()) return;
     setError("");
     setNotice("");
+    let coefficientFunctions: CoefficientFunctions | undefined;
+    try {
+      if (
+        current.config.coefficientMode === "rational" &&
+        current.config.expressions
+      )
+        coefficientFunctions = compileExpressions(current.config.expressions);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Проверьте формулы коэффициентов.",
+      );
+      return;
+    }
     setBusy(true);
     setProgress({ stage: "Подготавливаем расчёт", progress: 0 });
+    const calculation = { ...current.config, enforceFeasibility: true };
+    if (!current.config.enforceFeasibility)
+      update({ ...current, config: calculation });
     const job = {
       id: crypto.randomUUID(),
       scenarioId: current.id,
-      fingerprint: fingerprint(current),
+      fingerprint: fingerprint({ ...current, config: calculation }),
     };
     request.current = job;
     try {
@@ -220,6 +219,11 @@ export default function App() {
             setProgress({ stage: message.stage, progress: message.progress });
           if (message.type === "error") {
             setError(message.message);
+            requestAnimationFrame(() =>
+              document
+                .getElementById("qp-calculation-error")
+                ?.scrollIntoView({ block: "center" }),
+            );
             setBusy(false);
             request.current = null;
           }
@@ -240,7 +244,11 @@ export default function App() {
             );
             setBusy(false);
             request.current = null;
-            navigate("results", active.scenarioId, "charts");
+            requestAnimationFrame(() =>
+              document
+                .getElementById("qp-result")
+                ?.scrollIntoView({ block: "start" }),
+            );
           }
         };
         worker.current.onerror = () => {
@@ -255,7 +263,8 @@ export default function App() {
       }
       worker.current.postMessage({
         id: job.id,
-        config: structuredClone(current.config),
+        config: structuredClone(calculation),
+        coefficientFunctions,
       } satisfies CalculationRequest);
     } catch {
       setBusy(false);
@@ -276,13 +285,12 @@ export default function App() {
           <button
             className="brand"
             onClick={() => navigate("models")}
-            aria-label="План — модели"
+            aria-label="Квадратичное программирование — модели"
           >
             <span className="brand-symbol">
               <Layers3 size={23} />
             </span>
-            <span>План</span>
-            <span className="brand-description">Оптимизация решений</span>
+            <span>Квадратичное программирование</span>
           </button>
           <nav aria-label="Основная навигация">
             <button
@@ -291,13 +299,6 @@ export default function App() {
             >
               <FolderOpen size={17} />
               <span>Модели</span>
-            </button>
-            <button
-              className={`nav-button ${view === "method" ? "active" : ""}`}
-              onClick={() => navigate("method")}
-            >
-              <CircleHelp size={17} />
-              <span>О методе</span>
             </button>
             <a
               className="nav-button github-link"
@@ -322,7 +323,7 @@ export default function App() {
                   onClick={() =>
                     download(
                       localStorage.getItem(STORAGE_KEY) || "",
-                      "planning-storage-backup.json",
+                      "qp-storage-backup.json",
                       "application/json",
                     )
                   }
@@ -343,7 +344,7 @@ export default function App() {
           </div>
         )}
         {error && (
-          <div className="notice error" role="alert">
+          <div id="qp-calculation-error" className="notice error" role="alert">
             <strong>Не удалось завершить действие</strong>
             <p>{error}</p>
             <button
@@ -381,12 +382,9 @@ export default function App() {
             <div className="page-heading">
               <div>
                 <h1 ref={title} tabIndex={-1}>
-                  Модели и сценарии
+                  Задачи
                 </h1>
-                <p>
-                  Меняйте условия и находите план для каждого значения
-                  параметра.
-                </p>
+                <p>Параметрические задачи квадратичного программирования.</p>
               </div>
               <div className="button-row">
                 <button
@@ -398,10 +396,10 @@ export default function App() {
                 </button>
                 <button
                   className="button primary"
-                  onClick={() => create("production")}
+                  onClick={() => create("quadratic")}
                 >
                   <Plus size={17} />
-                  Производственная модель
+                  Новая задача
                 </button>
               </div>
             </div>
@@ -428,26 +426,16 @@ export default function App() {
                           <th scope="row">
                             <button
                               className="model-name"
-                              onClick={() =>
-                                navigate(
-                                  isCurrent(s) ? "results" : "editor",
-                                  s.id,
-                                )
-                              }
+                              onClick={() => navigate("editor", s.id)}
                             >
                               {s.name}
                             </button>
                             <span className="table-secondary">
-                              {formulaSize(s).n} переменных, {formulaSize(s).m}{" "}
-                              {s.config.kind === "production"
-                                ? "ресурсов"
-                                : "ограничений"}
+                              n = {formulaSize(s).n}, m = {formulaSize(s).m}
                             </span>
                           </th>
                           <td>
-                            {s.config.kind === "production"
-                              ? "Производственный план"
-                              : "Квадратичная модель"}
+                            Вогнутая квадратичная задача
                             <span className="table-secondary">
                               {s.parameter}: {number(s.config.tStart)} до{" "}
                               {number(s.config.tEnd)}
@@ -526,13 +514,10 @@ export default function App() {
               <section className="empty-state">
                 <FolderOpen size={32} />
                 <h2>Здесь будут ваши модели</h2>
-                <p>
-                  Начните с производственного примера или импортируйте
-                  сохранённый JSON.
-                </p>
+                <p>Создайте задачу или импортируйте сохранённый JSON.</p>
                 <button
                   className="button primary"
-                  onClick={() => create("production")}
+                  onClick={() => create("quadratic")}
                 >
                   Создать модель
                 </button>
@@ -540,17 +525,15 @@ export default function App() {
             )}
             <div className="alternative-model">
               <div>
-                <h2>Уже есть матрицы задачи?</h2>
-                <p>
-                  Задайте квадратичную функцию и линейные ограничения напрямую.
-                </p>
+                <h2>Пример из ноутбука</h2>
+                <p>Две переменные и пять строк K, плюс неотрицательность.</p>
               </div>
               <button
                 className="button quiet"
-                onClick={() => create("quadratic")}
+                onClick={() => create("example")}
               >
                 <Plus size={17} />
-                Общая модель
+                Открыть пример
               </button>
             </div>
           </>
@@ -562,16 +545,15 @@ export default function App() {
                 Все модели
               </button>
               <span>
-                {current.config.kind === "production"
-                  ? "Производственная модель"
-                  : "Квадратичная модель"}
+                n = {size.n} · m = {size.m}
+                {current.config.nonnegative !== false && " · x ≥ 0"}
               </span>
             </div>
             <div className="page-heading">
               <div>
                 <div className="heading-with-status">
                   <h1 ref={title} tabIndex={-1}>
-                    {view === "method" ? "Метод и точность" : current.name}
+                    {current.name}
                   </h1>
                   {actual && (
                     <span className="status ready">
@@ -580,13 +562,6 @@ export default function App() {
                     </span>
                   )}
                 </div>
-                <p>
-                  {view === "method"
-                    ? "Что оптимизирует программа и как проверить результат."
-                    : current.config.kind === "production"
-                      ? "Найдите объёмы выпуска, которые дают наибольшую прибыль."
-                      : "Найдите максимум квадратичной функции при заданных ограничениях."}
-                </p>
               </div>
               <div className="button-row">
                 <button
@@ -607,30 +582,60 @@ export default function App() {
                 </button>
               </div>
             </div>
+            <div className="editor-layout">
+              <Editor
+                key={current.id}
+                scenario={current}
+                onChange={update}
+                busy={busy}
+                onRun={run}
+              />
+              <aside className="model-inspector">
+                <h2>Ваша модель</h2>
+                <dl>
+                  <div>
+                    <dt>Переменные n</dt>
+                    <dd>{size.n}</dd>
+                  </div>
+                  <div>
+                    <dt>Строки матрицы K</dt>
+                    <dd>{size.m}</dd>
+                  </div>
+                  <div>
+                    <dt>Границы xᵢ ≥ 0</dt>
+                    <dd>{current.config.nonnegative === false ? 0 : size.n}</dd>
+                  </div>
+                  <div>
+                    <dt>Всего неравенств</dt>
+                    <dd>
+                      {size.m +
+                        (current.config.nonnegative === false ? 0 : size.n)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Диапазон параметра</dt>
+                    <dd>
+                      {number(current.config.tStart)} до{" "}
+                      {number(current.config.tEnd)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Расчётные точки</dt>
+                    <dd>
+                      {current.config.sampling === "adaptive"
+                        ? `до ${current.config.maxPoints}`
+                        : current.config.points}
+                    </dd>
+                  </div>
+                </dl>
+              </aside>
+            </div>
             <div className="workspace-navigation">
-              <nav aria-label="Разделы модели">
-                {(
-                  [
-                    ["editor", "Исходные данные", SlidersHorizontal],
-                    ["results", "План и динамика", GitBranch],
-                    ["method", "Метод и точность", FlaskConical],
-                  ] as const
-                ).map(([key, label, Icon]) => (
-                  <button
-                    key={key}
-                    className={view === key ? "active" : ""}
-                    aria-current={view === key ? "page" : undefined}
-                    onClick={() => navigate(key)}
-                  >
-                    <Icon size={17} />
-                    {label}
-                  </button>
-                ))}
-              </nav>
               <button
                 className="button primary calculate-button"
                 disabled={busy}
-                onClick={run}
+                type="submit"
+                form="model-form"
               >
                 {busy ? (
                   <LoaderCircle className="spinner" size={17} />
@@ -642,7 +647,7 @@ export default function App() {
                     ? "Выполняется расчёт"
                     : actual
                       ? "Пересчитать"
-                      : "Рассчитать план"}
+                      : "Рассчитать"}
                 </span>
               </button>
             </div>
@@ -667,108 +672,23 @@ export default function App() {
                 </p>
               </div>
             )}
-            {view === "editor" && (
-              <div className="editor-layout">
-                <Editor
-                  key={current.id}
-                  scenario={current}
-                  onChange={update}
-                  busy={busy}
-                  onRun={run}
-                />
-                <aside className="model-inspector">
-                  <h2>Ваша модель</h2>
-                  <dl>
-                    <div>
-                      <dt>
-                        {current.config.kind === "production"
-                          ? "Продукты"
-                          : "Переменные"}
-                      </dt>
-                      <dd>{size.n}</dd>
-                    </div>
-                    <div>
-                      <dt>
-                        {current.config.kind === "production"
-                          ? "Ресурсы"
-                          : "Ограничения"}
-                      </dt>
-                      <dd>{size.m}</dd>
-                    </div>
-                    <div>
-                      <dt>Диапазон параметра</dt>
-                      <dd>
-                        {number(current.config.tStart)} до{" "}
-                        {number(current.config.tEnd)}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Расчётные точки</dt>
-                      <dd>
-                        {current.config.sampling === "adaptive"
-                          ? `до ${current.config.maxPoints}`
-                          : current.config.points}
-                      </dd>
-                    </div>
-                  </dl>
-                  <div className="inspector-explanation">
-                    <h3>От данных к плану</h3>
-                    <p>
-                      Программа найдёт оптимальные значения в узлах диапазона и
-                      построит непрерывное приближение между ними.
-                    </p>
-                    <p>
-                      Параметр <i>t</i> меняет цены, затраты или ограничения по
-                      заданным коэффициентам.
-                    </p>
-                  </div>
-                  <div className="source-note">
-                    <Check size={16} />
-                    <span>
-                      Настройте данные под свою задачу. Для проверки других
-                      условий создайте копию модели.
-                    </span>
-                  </div>
-                  <button
-                    className="text-button"
-                    onClick={() => navigate("method")}
-                  >
-                    Разобраться в методе
-                    <ArrowUpRight size={15} />
-                  </button>
-                </aside>
-              </div>
-            )}
-            {view === "results" &&
-              (actual ? (
-                <Results
-                  scenario={current}
-                  detail={locationState.detail}
-                  onDetailChange={(d) => navigate("results", current.id, d)}
-                />
+            <section id="qp-result">
+              {actual ? (
+                <Results key={current.id} scenario={current} />
               ) : (
-                <section className="empty-state">
-                  <GitBranch size={36} />
-                  <h2>
-                    {result
-                      ? "Обновите расчёт после изменения данных"
-                      : "План появится после расчёта"}
-                  </h2>
+                <div className="empty-state">
+                  <GitBranch size={32} />
+                  <h2>{result ? "Исходные данные изменились" : "Результат"}</h2>
                   <p>
-                    Задайте исходные данные и нажмите «Рассчитать план». Здесь
-                    появятся решение, загрузка ресурсов и динамика по параметру.
+                    Нажмите «Рассчитать», чтобы получить оптимум в узлах сетки.
                   </p>
-                  <button
-                    className="button quiet"
-                    onClick={() => navigate("editor")}
-                  >
-                    Проверить исходные данные
-                  </button>
-                </section>
-              ))}
-            {view === "method" && (
-              <Method result={actual ? result : undefined} scenario={current} />
-            )}
+                </div>
+              )}
+            </section>
+            <details className="section result-disclosure method-disclosure">
+              <summary>Метод и диагностика</summary>
+              <Method result={actual ? result : undefined} />
+            </details>
           </>
         ) : (
           <section className="empty-state">
@@ -777,14 +697,14 @@ export default function App() {
             </h1>
             <button
               className="button primary"
-              onClick={() => create("production")}
+              onClick={() => create("quadratic")}
             >
-              Производственная модель
+              Новая задача
             </button>
           </section>
         )}
         <footer className="app-footer">
-          <span>План</span>
+          <span>Квадратичное программирование</span>
           <span>
             Данные сохраняются в этом браузере. Для переноса используйте JSON.
           </span>
@@ -797,13 +717,7 @@ export default function App() {
   );
 }
 
-function Method({
-  result: r,
-  scenario: s,
-}: {
-  result?: CalculationResult;
-  scenario: Scenario;
-}) {
+function Method({ result: r }: { result?: CalculationResult }) {
   const d = r?.diagnostics;
   return (
     <div className="method-layout">
@@ -871,56 +785,40 @@ function Method({
           <h2>Задача оптимизации</h2>
           <p>
             Для каждого значения параметра <i>t</i> программа максимизирует
-            функцию при линейных ограничениях и неотрицательных переменных.
+            функцию при линейных по x ограничениях. Границы x ≥ 0 можно включить
+            отдельно.
           </p>
           <div className="equation">
-            max f(x, t) = xᵀAx + b(t)ᵀx + c(t)
+            max f(x, t) = xᵀA(t)x + b(t)ᵀx + c(t)
             <br />
-            <span>Kx ≤ l(t), x ≥ 0</span>
+            <span>K(t)x ≤ l(t)</span>
           </div>
           <p>
-            Матрицы A и K постоянны. Векторы b(t), l(t) и свободный член c(t)
-            заданы линейно по параметру. Проверка вогнутости функции позволяет
-            трактовать найденный оптимум как глобальный с учётом численных
-            допусков.
+            Коэффициенты A(t), b(t), c(t), K(t) и l(t) задаются как отношения
+            многочленов.
           </p>
-          {s.config.kind === "production" && (
-            <details>
-              <summary>
-                Как производственные данные превращаются в задачу
-              </summary>
-              <div className="equation">
-                A = −M + RᵀHR
-                <br />
-                b(t) = p(t) − k − Rᵀr(t)
-                <br />
-                c(t) = v(t)
-                <br />K = [R; I; −I]
-                <br />
-                l(t) = [лимиты ресурсов; мощности(t); 0]
-              </div>
-              <p>
-                Цена и мощность каждого продукта, стоимость каждого ресурса и
-                свободный член задаются как начальное значение плюс изменение на
-                единицу t.
-              </p>
-            </details>
-          )}
+          <p>
+            На каждом узле проверяется, что симметричная часть A(t) отрицательно
+            полуопределённа. Условия Куна — Таккера проверяются с численным
+            допуском. Теоретическая постановка предполагает ограниченность
+            допустимого множества, а вогнутость на всём интервале отдельно не
+            проверяется.
+          </p>
         </section>
         <section className="section">
           <h2>Непрерывное приближение</h2>
           <p>
             Значения переменных приближаются дробно-рациональными функциями.
-            Значение цели получается подстановкой приближённого плана в исходную
+            Значение цели получается подстановкой приближения в исходную
             функцию.
           </p>
           <div className="equation">
             x̃ᵢ(t) = (a₀ + a₁t + … + aₚtᵖ) / (1 + d₁t + … + dqtq)
           </div>
           <p>
-            По умолчанию минимизируется сумма квадратов ошибок по переменным,
-            как в ноутбуке. В расширенных настройках доступен взвешенный
-            критерий из теории с дополнительной ошибкой по целевой функции.
+            Минимизируется взвешенная сумма квадратов ошибок вектора решения и
+            целевой функции. Веса нормируются до суммы 1, ограничения
+            проверяются при подборе в каждом узле.
           </p>
           <p className="notice">
             Ограничения при подборе проверяются в расчётных узлах.
@@ -937,8 +835,8 @@ function Method({
           </p>
           <p>
             Стабильность коэффициентов сама по себе не гарантирует точность
-            плана. Если предел числа точек достигнут раньше критерия, результат
-            отмечается как несошедшийся.
+            приближения. Если предел числа точек достигнут раньше критерия,
+            результат отмечается как несошедшийся.
           </p>
           {r && r.convergence.length > 1 && (
             <>
@@ -985,7 +883,7 @@ function Method({
         <ol>
           <li>
             <strong>Численное решение</strong>
-            <p>Оптимальный план для выбранного узла параметра.</p>
+            <p>Оптимальный вектор для выбранного узла параметра.</p>
           </li>
           <li>
             <strong>Приближение</strong>

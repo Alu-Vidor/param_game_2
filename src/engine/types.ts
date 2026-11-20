@@ -1,4 +1,8 @@
-export type ProblemKind = "production" | "quadratic";
+import type {
+  CoefficientExpressions,
+  CoefficientFunctions,
+} from "../lib/coefficient";
+
 export interface ProductionData {
   M: number[][];
   H: number[][];
@@ -25,9 +29,11 @@ export interface QuadraticData {
   l1: number[];
 }
 export interface CalculationConfig {
-  kind: ProblemKind;
-  production: ProductionData;
+  kind: "quadratic";
   quadratic: QuadraticData;
+  nonnegative?: boolean;
+  coefficientMode?: "affine" | "rational";
+  expressions?: CoefficientExpressions;
   tStart: number;
   tEnd: number;
   points: number;
@@ -50,6 +56,8 @@ export interface Sample {
   x: number[];
   value: number;
   slack: number[];
+  constraintLeft?: number[];
+  constraintRight?: number[];
   maxViolation: number;
   stationarity: number;
   kkt: boolean;
@@ -73,6 +81,7 @@ export interface CalculationResult {
   samples: Sample[];
   curve: CurvePoint[];
   fits: RationalFit[];
+  argumentCenter?: number;
   canonical: QuadraticData;
   diagnostics: {
     concave: boolean;
@@ -100,4 +109,5 @@ export type CalculationMessage =
 export interface CalculationRequest {
   id: string;
   config: CalculationConfig;
+  coefficientFunctions?: CoefficientFunctions;
 }

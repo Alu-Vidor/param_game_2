@@ -1507,3 +1507,52 @@ summary {
     scroll-behavior: auto !important;
   }
 }
+
+.dimension-control {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}
+.dimension-control legend {
+  font-weight: 600;
+  margin-block-end: var(--space-xs);
+}
+.dimension-control .button {
+  min-inline-size: 48px;
+  min-block-size: 48px;
+}
+.nonnegative-toggle {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: 48px;
+  gap: var(--space-sm);
+  margin-inline-end: var(--space-lg);
+}
+.formula-input {
+  min-inline-size: 10rem;
+  font-family: ui-monospace, Consolas, monospace;
+}
+.formula-input:user-invalid {
+  outline: 2px solid var(--color-danger, #a02b2b);
+  outline-offset: -2px;
+}
+
+#qp-result {
+  scroll-margin-top: 5rem;
+}
+.workspace-navigation {
+  justify-content: flex-end;
+}
+.result-disclosure > summary {
+  cursor: pointer;
+  padding-block: 0.875rem;
+  font-weight: 650;
+}
+.analysis-section .result-disclosure {
+  padding-inline: var(--space-lg);
+  border-block-end: 1px solid var(--color-rule);
+}
+.method-disclosure {
+  margin-block-start: var(--space-lg);
+}
