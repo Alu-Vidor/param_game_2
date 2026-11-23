@@ -1,22 +1,23 @@
 /* Shared visual language for the two mathematical workspaces. */
 :root {
-  --lab-paper: #f3f6fb;
+  --lab-paper: #fdfafa;
   --lab-surface: #fff;
-  --lab-ink: #172942;
-  --lab-muted: #41536d;
-  --lab-line: #d6e0ed;
-  --lab-blue: #244bb7;
-  --lab-blue-deep: #1c3b96;
-  --lab-tint: #edf3ff;
-  --lab-navy: #172944;
+  --lab-ink: #302329;
+  --lab-muted: #59454d;
+  --lab-line: #ead8dc;
+  --lab-accent: #ad1934;
+  --lab-accent-deep: #850f29;
+  --lab-tint: #fff0f2;
   --lab-radius: 0.75rem;
   --lab-width: 84rem;
   --lab-gutter: clamp(1rem, 3vw, 2.5rem);
 }
 
 .mathlab-header {
-  background: var(--lab-navy);
-  color: #fff;
+  background: var(--lab-surface);
+  color: var(--lab-ink);
+  border-block-start: 3px solid var(--lab-accent);
+  border-block-end: 1px solid var(--lab-line);
 }
 .mathlab-header-inner {
   max-inline-size: var(--lab-width);
@@ -48,8 +49,8 @@
   flex: none;
   inline-size: 2.125rem;
   block-size: 2.125rem;
-  background: #e5edff;
-  color: var(--lab-blue-deep);
+  background: var(--lab-accent);
+  color: #fff;
   border-radius: 0.5rem;
 }
 .mathlab-header nav :is(button, a) {
@@ -61,7 +62,7 @@
   padding-inline: 0.625rem;
   border: 1px solid transparent;
   border-radius: 0.5rem;
-  color: #f4f7ff;
+  color: #850f29;
   font-size: 0.9rem;
   text-decoration: none;
   white-space: nowrap;
@@ -69,7 +70,7 @@
 .mathlab-header nav :is(button, a):hover,
 .mathlab-header nav [aria-current="page"],
 .mathlab-header nav .active {
-  background: #2b4163;
+  background: #fff0f2;
 }
 .mathlab-skip {
   position: fixed;
@@ -119,7 +120,7 @@
   gap: 0.375rem;
   padding: 0.375rem;
   border-radius: 0.375rem;
-  color: var(--lab-blue-deep);
+  color: var(--lab-accent-deep);
   font-weight: 600;
 }
 .mathlab-jump:hover {
@@ -143,14 +144,14 @@
   overflow: auto;
   padding: 0.875rem 1rem;
   border: 1px solid var(--lab-line);
-  border-inline-start: 3px solid var(--lab-blue);
+  border-inline-start: 3px solid var(--lab-accent);
   border-radius: 0.375rem;
   background: var(--lab-tint);
   color: var(--lab-ink);
 }
 .math-scroll:focus-visible,
 .mathlab-table-region:focus-visible {
-  outline: 2px solid var(--lab-blue);
+  outline: 2px solid var(--lab-accent);
   outline-offset: 2px;
 }
 .math-scroll math {
@@ -215,7 +216,7 @@
   min-block-size: 2.75rem;
   padding-inline: 0.375rem;
   border-radius: 0.375rem;
-  color: var(--lab-blue-deep);
+  color: var(--lab-accent-deep);
   font-size: 0.875rem;
 }
 .math-copy:hover {
@@ -246,7 +247,7 @@
 }
 .result-disclosure > summary::marker,
 .lp-dimensions > summary::marker {
-  color: var(--lab-blue);
+  color: var(--lab-accent);
 }
 @media (min-width: 54rem) and (min-height: 31rem) {
   .mathlab-command {
@@ -277,16 +278,17 @@
   --color-paper: var(--lab-paper);
   --color-surface: var(--lab-surface);
   --color-paper-2: var(--lab-tint);
-  --color-paper-3: #e0eaff;
+  --color-paper-3: #ffe0e5;
   --color-ink: var(--lab-ink);
-  --color-ink-2: #253c5b;
+  --color-ink-2: #4f363f;
   --color-muted: var(--lab-muted);
   --color-rule: var(--lab-line);
-  --color-input-rule: #8394ae;
-  --color-accent: var(--lab-blue);
-  --color-accent-deep: var(--lab-blue-deep);
-  --color-accent-soft: #e0eaff;
-  --color-focus: var(--lab-blue);
+  --color-input-rule: #88696f;
+  --color-accent: var(--lab-accent);
+  --color-accent-ink: #fff;
+  --color-accent-deep: var(--lab-accent-deep);
+  --color-accent-soft: #ffe0e5;
+  --color-focus: var(--lab-accent);
   --gutter: var(--lab-gutter);
   --container: var(--lab-width);
 }
@@ -384,7 +386,7 @@
   padding: 0.125rem 0.375rem;
   margin-block-start: 0.25rem;
   overflow: auto;
-  color: var(--lab-blue-deep);
+  color: var(--lab-accent-deep);
   background: var(--lab-tint);
   border-radius: 0.25rem;
   font-family: "Cambria Math", "STIX Two Math", math;
@@ -421,5 +423,30 @@
   }
   .math-compact mtd {
     text-align: start;
+  }
+}
+
+.mathlab-qp input,
+.mathlab-qp select,
+.mathlab-qp .coefficient-cell {
+  scroll-margin-block: 4.5rem 1rem;
+}
+.mathlab-qp .coefficient-cell:has([aria-invalid="true"]) input {
+  outline: 2px solid var(--color-error);
+  outline-offset: -2px;
+}
+.mathlab-qp .coefficient-error {
+  display: block;
+  max-inline-size: 20ch;
+  margin-block-start: 0.25rem;
+  overflow-wrap: anywhere;
+}
+.mathlab-qp .result-value {
+  box-shadow: inset 3px 0 var(--lab-accent);
+}
+@media (forced-colors: active) {
+  .mathlab-qp .result-value,
+  .mathlab-qp .coefficient-cell:has([aria-invalid="true"]) input {
+    outline: 1px solid CanvasText;
   }
 }

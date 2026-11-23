@@ -7,7 +7,7 @@ import {
   compileExpressions,
   type CoefficientFunctions,
 } from "./lib/coefficient";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -82,6 +82,7 @@ export default function App() {
   const request = useRef<{
     id: string;
     scenarioId: string;
+    name: string;
     fingerprint: string;
   } | null>(null);
   const importInput = useRef<HTMLInputElement>(null);
@@ -89,6 +90,10 @@ export default function App() {
   const current =
     scenarios.find((s) => s.id === locationState.id) || scenarios[0];
   const view = locationState.view;
+  const visibleModelId = useRef<string | undefined>(undefined);
+  useLayoutEffect(() => {
+    visibleModelId.current = view === "editor" ? current?.id : undefined;
+  }, [view, current?.id]);
   const size = current ? formulaSize(current) : { n: 0, m: 0 };
 
   useEffect(() => {
@@ -98,17 +103,24 @@ export default function App() {
   }, []);
   useEffect(() => {
     if (!canSave) return;
-    const timer = setTimeout(() => {
+    function save(reportStatus: boolean) {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(scenarios));
-        setStorageError("");
+        if (reportStatus) setStorageError("");
       } catch {
-        setStorageError(
-          "Не удалось сохранить данные в браузере. Экспортируйте модель в JSON, чтобы не потерять изменения.",
-        );
+        if (reportStatus)
+          setStorageError(
+            "Не удалось сохранить данные в браузере. Экспортируйте модель в JSON, чтобы не потерять изменения.",
+          );
       }
-    }, 200);
-    return () => clearTimeout(timer);
+    }
+    const timer = setTimeout(() => save(true), 200);
+    const flush = () => save(false);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("pagehide", flush);
+    };
   }, [scenarios, canSave]);
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "instant" });
@@ -183,11 +195,7 @@ export default function App() {
     setNotice("Расчёт остановлен. Исходные данные сохранены.");
   }
   function run() {
-    if (!current || busy) return;
-    const form = document.getElementById(
-      "model-form",
-    ) as HTMLFormElement | null;
-    if (form && !form.reportValidity()) return;
+    if (!current || request.current) return;
     setError("");
     setNotice("");
     let coefficientFunctions: CoefficientFunctions | undefined;
@@ -213,6 +221,7 @@ export default function App() {
     const job = {
       id: crypto.randomUUID(),
       scenarioId: current.id,
+      name: current.name,
       fingerprint: fingerprint({ ...current, config: calculation }),
     };
     request.current = job;
@@ -231,12 +240,21 @@ export default function App() {
           if (message.type === "progress")
             setProgress({ stage: message.stage, progress: message.progress });
           if (message.type === "error") {
-            setError(message.message);
-            requestAnimationFrame(() =>
-              document
-                .getElementById("qp-calculation-error")
-                ?.scrollIntoView({ block: "center" }),
-            );
+            if (visibleModelId.current === active.scenarioId) {
+              setError(message.message);
+              requestAnimationFrame(() =>
+                document
+                  .getElementById("qp-calculation-error")
+                  ?.scrollIntoView({ block: "center" }),
+              );
+            } else {
+              setNotice(
+                "Расчёт «" +
+                  active.name +
+                  "» завершился ошибкой. " +
+                  message.message,
+              );
+            }
             setBusy(false);
             request.current = null;
           }
@@ -257,7 +275,10 @@ export default function App() {
             );
             setBusy(false);
             request.current = null;
-            requestAnimationFrame(showResults);
+            requestAnimationFrame(() => {
+              if (visibleModelId.current === active.scenarioId) showResults();
+              else setNotice("Расчёт «" + active.name + "» завершён.");
+            });
           }
         };
         worker.current.onerror = () => {

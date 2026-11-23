@@ -1,3 +1,4 @@
+import { rememberMatrix, rememberVector } from "../lib/resizeMemory";
 import { RationalExpression } from "./MathNotation";
 import {
   QuadraticConstraint,
@@ -104,7 +105,7 @@ function NumericCell({
         required
         aria-label={label}
         aria-describedby={descriptions}
-        aria-invalid={error ? true : undefined}
+        aria-invalid={Boolean(error)}
         value={draft}
         onFocus={() => {
           focused.current = true;
@@ -151,6 +152,7 @@ function FormulaCell({
   const id = useId();
   const input = useRef<HTMLInputElement>(null);
   const [focused, setFocused] = useState(false);
+  const [showError, setShowError] = useState(false);
   const { coefficient, error } = useMemo(() => {
     try {
       return { coefficient: parseCoefficient(value), error: "" };
@@ -164,6 +166,7 @@ function FormulaCell({
   useEffect(() => {
     input.current?.setCustomValidity(error);
   }, [error]);
+  const visibleError = showError && error;
   return (
     <div className="coefficient-cell">
       <input
@@ -173,16 +176,33 @@ function FormulaCell({
         className="numeric-input formula-input"
         aria-label={labelledBy ? undefined : label}
         aria-labelledby={labelledBy}
-        aria-describedby="coefficient-help"
+        aria-describedby={
+          visibleError
+            ? "coefficient-help " + id + "-error"
+            : "coefficient-help"
+        }
+        aria-invalid={Boolean(visibleError)}
         required
         maxLength={2000}
         autoComplete="off"
         spellCheck={false}
         value={value}
-        onChange={(event) => onChange(event.currentTarget.value)}
+        onChange={(event) => {
+          setShowError(false);
+          onChange(event.currentTarget.value);
+        }}
         onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
+        onBlur={() => {
+          setFocused(false);
+          setShowError(true);
+        }}
+        onInvalid={() => setShowError(true)}
       />
+      {visibleError && (
+        <span className="field-error coefficient-error" id={id + "-error"}>
+          {error}
+        </span>
+      )}
       {focused && coefficient && value.includes("t") && (
         <div className="coefficient-preview" aria-hidden="true">
           <math>
@@ -342,6 +362,11 @@ function Matrix<T>({
 }
 
 export default function Editor({ scenario, onChange, busy, onRun }: Props) {
+  const resizeMemory = useRef<{
+    quadratic: QuadraticData;
+    expressions: CoefficientExpressions;
+    variableNames: string[];
+  }>(null);
   const c = scenario.config;
   const q = c.quadratic;
   const expressions =
@@ -384,10 +409,33 @@ export default function Editor({ scenario, onChange, busy, onRun }: Props) {
   }
 
   function resizeQuadratic(nextN: number, nextM: number) {
+    const saved = resizeMemory.current;
+    const quadratic = {
+      ...q,
+      A: rememberMatrix(q.A, saved?.quadratic.A),
+      b0: rememberVector(q.b0, saved?.quadratic.b0),
+      b1: rememberVector(q.b1, saved?.quadratic.b1),
+      K: rememberMatrix(q.K, saved?.quadratic.K),
+      l0: rememberVector(q.l0, saved?.quadratic.l0),
+      l1: rememberVector(q.l1, saved?.quadratic.l1),
+    };
+    const allFormulas = {
+      A: rememberMatrix(formulas.A, saved?.expressions.A),
+      b: rememberVector(formulas.b, saved?.expressions.b),
+      c: formulas.c,
+      K: rememberMatrix(formulas.K, saved?.expressions.K),
+      l: rememberVector(formulas.l, saved?.expressions.l),
+    };
+    const variableNames = rememberVector(varNames, saved?.variableNames);
+    resizeMemory.current = {
+      quadratic,
+      expressions: allFormulas,
+      variableNames,
+    };
     update({
       variableNames: Array.from(
         { length: nextN },
-        (_, i) => scenario.variableNames[i] ?? variableName(i),
+        (_, i) => variableNames[i] ?? variableName(i),
       ),
       config: {
         ...c,
@@ -395,27 +443,27 @@ export default function Editor({ scenario, onChange, busy, onRun }: Props) {
           A: Array.from({ length: nextN }, (_, i) =>
             Array.from(
               { length: nextN },
-              (_, j) => expressions.A[i]?.[j] ?? (i === j ? "-1" : "0"),
+              (_, j) => allFormulas.A[i]?.[j] ?? (i === j ? "-1" : "0"),
             ),
           ),
-          b: Array.from({ length: nextN }, (_, i) => expressions.b[i] ?? "0"),
-          c: expressions.c,
+          b: Array.from({ length: nextN }, (_, i) => allFormulas.b[i] ?? "0"),
+          c: allFormulas.c,
           K: Array.from({ length: nextM }, (_, i) =>
             Array.from(
               { length: nextN },
-              (_, j) => expressions.K[i]?.[j] ?? "0",
+              (_, j) => allFormulas.K[i]?.[j] ?? "0",
             ),
           ),
-          l: Array.from({ length: nextM }, (_, i) => expressions.l[i] ?? "0"),
+          l: Array.from({ length: nextM }, (_, i) => allFormulas.l[i] ?? "0"),
         },
         quadratic: {
           ...q,
-          A: resizeMatrix(q.A, nextN, nextN, -1),
-          b0: resizeVector(q.b0, nextN),
-          b1: resizeVector(q.b1, nextN),
-          K: resizeMatrix(q.K, nextM, nextN),
-          l0: resizeVector(q.l0, nextM),
-          l1: resizeVector(q.l1, nextM),
+          A: resizeMatrix(quadratic.A, nextN, nextN, -1),
+          b0: resizeVector(quadratic.b0, nextN),
+          b1: resizeVector(quadratic.b1, nextN),
+          K: resizeMatrix(quadratic.K, nextM, nextN),
+          l0: resizeVector(quadratic.l0, nextM),
+          l1: resizeVector(quadratic.l1, nextM),
         },
       },
     });
@@ -425,6 +473,18 @@ export default function Editor({ scenario, onChange, busy, onRun }: Props) {
       id="model-form"
       className="editor"
       aria-label="Исходные данные"
+      onInvalidCapture={(event) => {
+        const input = event.target;
+        if (input instanceof HTMLElement) {
+          for (
+            let group = input.closest("details");
+            group;
+            group = group.parentElement?.closest("details") ?? null
+          ) {
+            group.open = true;
+          }
+        }
+      }}
       onSubmit={(event) => {
         event.preventDefault();
         onRun?.();
@@ -432,6 +492,15 @@ export default function Editor({ scenario, onChange, busy, onRun }: Props) {
     >
       <fieldset disabled={busy} className="editor-fields">
         <legend className="visually-hidden">Параметры модели</legend>
+
+        {resizeMemory.current &&
+          (resizeMemory.current.quadratic.A.length > n ||
+            resizeMemory.current.quadratic.K.length > m) && (
+            <p className="help-text">
+              Скрытые коэффициенты восстановятся при увеличении размера в этом
+              редакторе.
+            </p>
+          )}
 
         <Section title="Постановка задачи">
           <div className="equation-stack">
