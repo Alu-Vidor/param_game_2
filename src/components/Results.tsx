@@ -127,10 +127,14 @@ export default function Results({ scenario }: Props) {
       : []),
   ];
   function csv() {
+    const unit = scenario.valueUnit.trim();
+    const metric = scenario.valueLabel;
+    const heading = (kind: string) =>
+      metric + ", " + kind + (unit ? " (" + unit + ")" : "");
     const header = [
       scenario.parameter,
-      `${scenario.valueLabel}, численное решение (${scenario.valueUnit})`,
-      `${scenario.valueLabel}, приближение (${scenario.valueUnit})`,
+      heading("численное решение"),
+      heading("приближение"),
       "Абсолютная ошибка результата",
       ...variableNames.flatMap((name) => [
         `${name}, численное решение`,
