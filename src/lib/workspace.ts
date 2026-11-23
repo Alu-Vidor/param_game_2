@@ -143,7 +143,7 @@ function defaultConfig(preset: Preset): CalculationConfig {
 export function createScenario(preset: Preset = "example"): Scenario {
   return {
     id: crypto.randomUUID(),
-    name: preset === "example" ? "Пример из ноутбука" : "Новая задача",
+    name: preset === "example" ? "Пример" : "Новая задача",
     notes: "",
     parameter: "t",
     parameterUnit: "",
@@ -643,7 +643,10 @@ export function parseScenario(data: unknown, strict = true): Scenario {
   const config = toQuadratic(source);
   const n = config.quadratic.A.length;
   const legacy = source.kind === "production";
-  const name = text(s.name, "Название модели", 200);
+  const name = text(s.name, "Название модели", 200).replace(
+    /^Пример из ноутбука(?=(?: \(копия\))*$)/,
+    "Пример",
+  );
   const variableNames = names(
     s.variableNames,
     "Названия переменных",
@@ -655,9 +658,7 @@ export function parseScenario(data: unknown, strict = true): Scenario {
       s.id === undefined
         ? crypto.randomUUID()
         : text(s.id, "Идентификатор модели", 200),
-    name: legacy
-      ? name.replace(/^Производственный план/, "Пример из ноутбука")
-      : name,
+    name: legacy ? name.replace(/^Производственный план/, "Пример") : name,
     notes: text(s.notes, "Примечание", 1000, ""),
     parameter: text(s.parameter, "Название параметра", 80, "Параметр"),
     parameterUnit: text(s.parameterUnit, "Единицы параметра", 40, ""),

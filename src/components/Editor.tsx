@@ -782,9 +782,9 @@ export default function Editor({ scenario, onChange, busy, onRun }: Props) {
             <summary>Настроить критерий приближения</summary>
             <div className="details-body">
               <p className="help-text">
-                По умолчанию используется критерий ноутбука: сумма квадратов
-                ошибок по переменным. Теория также допускает взвешенную ошибку
-                целевой функции.
+                Веса задают вклад ошибок по переменным и по целевой функции
+                в критерий приближения. Значение 0 исключает соответствующее
+                слагаемое.
               </p>
               <div className="inline-fields">
                 <NumberField

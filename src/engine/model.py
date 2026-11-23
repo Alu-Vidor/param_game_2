@@ -1,8 +1,7 @@
 """Parametric concave quadratic programming and rational approximation.
 
-The objective and constraints follow the supplied notebook. Numerical adapters
-fix its stationary-point, gradient and convergence-reporting errors; see
-docs/math.md. No user text is executed as Python.
+The solver checks stationary points and constrained optima at sampled parameter
+values. No user text is executed as Python.
 """
 
 import json
@@ -437,7 +436,7 @@ def rational_problem_factory(functions, n, m, start, end):
 
 
 def fit_rational(problem, ts, exact, values, p, q, enforce, wx, wf, deadline, nonnegative=True, node_problems=None, center=0.0):
-    """Fit the notebook's rational family with an analytic Jacobian.
+    """Fit rational functions with an analytic Jacobian.
 
     The numerical basis uses (t - center) / scale. Returned coefficients are
     in powers of (t - center), with denominator constant exactly one.

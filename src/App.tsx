@@ -555,7 +555,7 @@ export default function App() {
             )}
             <div className="alternative-model">
               <div>
-                <h2>Пример из ноутбука</h2>
+                <h2>Пример</h2>
                 <p>Две переменные и пять строк K, плюс неотрицательность.</p>
               </div>
               <button
@@ -960,14 +960,6 @@ function Method({ result: r }: { result?: CalculationResult }) {
             <p>Нулевой остаток означает, что ограничение активно.</p>
           </li>
         </ol>
-        <a
-          href="https://github.com/Alu-Vidor/param_game_2/blob/main/docs/math.md"
-          target="_blank"
-          rel="noreferrer"
-        >
-          Формулы и проверка реализации
-          <ArrowUpRight size={15} />
-        </a>
       </aside>
     </div>
   );

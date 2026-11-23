@@ -61,13 +61,29 @@ test('a saved legacy example is converted without changing or losing the solutio
   const parsed = parseScenario(JSON.parse(JSON.stringify(legacy)));
   const q = parsed.config.quadratic;
   assert.equal(parsed.config.nonnegative, true);
-  assert.equal(parsed.name, "Пример из ноутбука");
+  assert.equal(parsed.name, "Пример");
   assert.deepEqual(q.K, [[.15, .03], [.05, .3], [.1, .06], [1, 0], [0, 1]]);
   assert.ok(Math.abs(q.A[0][0] + .6965) < 1e-14);
   assert.ok(Math.abs(q.b1[0] - 1.715) < 1e-14);
   assert.equal(parsed.snapshot?.result.samples[0].slack.length, 5);
   assert.equal(isCurrent(parsed), true);
   assert.equal(isCurrent(parseScenario(JSON.parse(JSON.stringify(parsed)))), true);
+});
+
+test('stored example titles are updated without changing custom names or results', () => {
+  assert.equal(createScenario().name, 'Пример');
+  const saved = withSnapshot();
+  storage(JSON.stringify([
+    { ...saved, name: 'Пример из ноутбука' },
+    { ...saved, id: 'copy', name: 'Пример из ноутбука (копия)' },
+    { ...saved, id: 'custom', name: 'Пример из ноутбука — моя модель' },
+  ]));
+  const { scenarios } = loadWorkspace();
+  assert.deepEqual(scenarios.map(s => s.name), [
+    'Пример', 'Пример (копия)', 'Пример из ноутбука — моя модель',
+  ]);
+  assert.ok(scenarios.every(isCurrent));
+  assert.deepEqual(scenarios[0].snapshot, saved.snapshot);
 });
 
 test('an exported scenario round-trips without retaining references to imported objects', () => {
