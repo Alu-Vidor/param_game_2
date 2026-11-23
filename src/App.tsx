@@ -1,10 +1,17 @@
 import {
+  ApproximationForm,
+  QuadraticConstraint,
+  QuadraticObjective,
+} from "./components/QuadraticNotation";
+import {
   compileExpressions,
   type CoefficientFunctions,
 } from "./lib/coefficient";
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
+  ArrowRight,
+  ArrowUp,
   ArrowUpRight,
   Check,
   CheckCheck,
@@ -52,6 +59,12 @@ function route() {
 }
 function formulaSize(s: Scenario) {
   return { n: s.config.quadratic.A.length, m: s.config.quadratic.K.length };
+}
+
+function showResults() {
+  const results = document.getElementById("qp-result");
+  results?.focus({ preventScroll: true });
+  results?.scrollIntoView({ block: "start" });
 }
 
 export default function App() {
@@ -244,11 +257,7 @@ export default function App() {
             );
             setBusy(false);
             request.current = null;
-            requestAnimationFrame(() =>
-              document
-                .getElementById("qp-result")
-                ?.scrollIntoView({ block: "start" }),
-            );
+            requestAnimationFrame(showResults);
           }
         };
         worker.current.onerror = () => {
@@ -280,14 +289,14 @@ export default function App() {
       <a className="skip-link" href="#main">
         Перейти к содержимому
       </a>
-      <header className="app-header">
-        <div className="container header-inner">
+      <header className="mathlab-header">
+        <div className="mathlab-header-inner">
           <button
-            className="brand"
+            className="mathlab-brand"
             onClick={() => navigate("models")}
             aria-label="Квадратичное программирование — модели"
           >
-            <span className="brand-symbol">
+            <span className="mathlab-brand-mark">
               <Layers3 size={23} />
             </span>
             <span>Квадратичное программирование</span>
@@ -312,7 +321,7 @@ export default function App() {
           </nav>
         </div>
       </header>
-      <main id="main" className="container app-main">
+      <main id="main" className="container app-main mathlab-qp">
         {storageError && (
           <div className="notice warning" role="alert">
             <p>{storageError}</p>
@@ -582,7 +591,61 @@ export default function App() {
                 </button>
               </div>
             </div>
-            <div className="editor-layout">
+            <div className="mathlab-command">
+              <span className="mathlab-section-label">Исходные данные</span>
+              <div className="mathlab-actions">
+                {actual && (
+                  <button
+                    className="mathlab-jump"
+                    type="button"
+                    onClick={showResults}
+                  >
+                    К результатам <ArrowRight size={15} aria-hidden="true" />
+                  </button>
+                )}
+                <button
+                  className="button primary calculate-button"
+                  disabled={busy}
+                  type="submit"
+                  form="model-form"
+                >
+                  {busy ? (
+                    <LoaderCircle className="spinner" size={17} />
+                  ) : (
+                    <Play size={16} />
+                  )}
+                  <span>
+                    {busy
+                      ? "Выполняется расчёт"
+                      : actual
+                        ? "Пересчитать"
+                        : "Рассчитать"}
+                  </span>
+                </button>
+              </div>
+            </div>
+            {busy && (
+              <div className="calculation-progress" role="status">
+                <div>
+                  <LoaderCircle size={20} className="spinner" />
+                  <span>{progress.stage}</span>
+                  <button className="button quiet" onClick={cancel}>
+                    <Square size={13} />
+                    Остановить
+                  </button>
+                </div>
+                <progress
+                  max={1}
+                  value={progress.progress}
+                  aria-label="Ход расчёта"
+                />
+                <p>
+                  Первый запуск загружает вычислительный модуль. Расчёт
+                  выполняется на вашем устройстве.
+                </p>
+              </div>
+            )}
+            <div className="editor-layout" id="qp-inputs" tabIndex={-1}>
               <Editor
                 key={current.id}
                 scenario={current}
@@ -630,55 +693,38 @@ export default function App() {
                 </dl>
               </aside>
             </div>
-            <div className="workspace-navigation">
-              <button
-                className="button primary calculate-button"
-                disabled={busy}
-                type="submit"
-                form="model-form"
-              >
-                {busy ? (
-                  <LoaderCircle className="spinner" size={17} />
-                ) : (
-                  <Play size={16} />
-                )}
-                <span>
-                  {busy
-                    ? "Выполняется расчёт"
-                    : actual
-                      ? "Пересчитать"
-                      : "Рассчитать"}
-                </span>
-              </button>
-            </div>
-            {busy && (
-              <div className="calculation-progress" role="status">
-                <div>
-                  <LoaderCircle size={20} className="spinner" />
-                  <span>{progress.stage}</span>
-                  <button className="button quiet" onClick={cancel}>
-                    <Square size={13} />
-                    Остановить
-                  </button>
-                </div>
-                <progress
-                  max={1}
-                  value={progress.progress}
-                  aria-label="Ход расчёта"
-                />
-                <p>
-                  Первый запуск загружает вычислительный модуль. Расчёт
-                  выполняется на вашем устройстве.
-                </p>
+            <section
+              id="qp-result"
+              className="mathlab-results"
+              tabIndex={-1}
+              aria-labelledby="qp-result-title"
+            >
+              <div className="mathlab-results-heading">
+                <h2 className="mathlab-result-title" id="qp-result-title">
+                  Результаты
+                </h2>
+                <button
+                  type="button"
+                  className="mathlab-jump"
+                  onClick={() => {
+                    const inputs = document.getElementById("qp-inputs");
+                    inputs?.focus({ preventScroll: true });
+                    inputs?.scrollIntoView({ block: "start" });
+                  }}
+                >
+                  <ArrowUp size={15} aria-hidden="true" />К исходным данным
+                </button>
               </div>
-            )}
-            <section id="qp-result">
               {actual ? (
                 <Results key={current.id} scenario={current} />
               ) : (
                 <div className="empty-state">
                   <GitBranch size={32} />
-                  <h2>{result ? "Исходные данные изменились" : "Результат"}</h2>
+                  <h3>
+                    {result
+                      ? "Исходные данные изменились"
+                      : "Расчёт ещё не выполнен"}
+                  </h3>
                   <p>
                     Нажмите «Рассчитать», чтобы получить оптимум в узлах сетки.
                   </p>
@@ -788,10 +834,9 @@ function Method({ result: r }: { result?: CalculationResult }) {
             функцию при линейных по x ограничениях. Границы x ≥ 0 можно включить
             отдельно.
           </p>
-          <div className="equation">
-            max f(x, t) = xᵀA(t)x + b(t)ᵀx + c(t)
-            <br />
-            <span>K(t)x ≤ l(t)</span>
+          <div className="equation-stack">
+            <QuadraticObjective maximize />
+            <QuadraticConstraint />
           </div>
           <p>
             Коэффициенты A(t), b(t), c(t), K(t) и l(t) задаются как отношения
@@ -812,9 +857,7 @@ function Method({ result: r }: { result?: CalculationResult }) {
             Значение цели получается подстановкой приближения в исходную
             функцию.
           </p>
-          <div className="equation">
-            x̃ᵢ(t) = (a₀ + a₁t + … + aₚtᵖ) / (1 + d₁t + … + dqtq)
-          </div>
+          <ApproximationForm />
           <p>
             Минимизируется взвешенная сумма квадратов ошибок вектора решения и
             целевой функции. Веса нормируются до суммы 1, ограничения

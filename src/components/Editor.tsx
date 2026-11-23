@@ -1,8 +1,21 @@
+import { RationalExpression } from "./MathNotation";
+import {
+  QuadraticConstraint,
+  QuadraticObjective,
+  QuadraticLoss,
+} from "./QuadraticNotation";
 import {
   parseCoefficient,
   type CoefficientExpressions,
 } from "../lib/coefficient";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Minus, Plus } from "lucide-react";
 import type { CalculationConfig, QuadraticData } from "../engine/types";
 import {
@@ -137,36 +150,47 @@ function FormulaCell({
 }) {
   const id = useId();
   const input = useRef<HTMLInputElement>(null);
-  function validate(field: HTMLInputElement) {
+  const [focused, setFocused] = useState(false);
+  const { coefficient, error } = useMemo(() => {
     try {
-      parseCoefficient(field.value);
-      field.setCustomValidity("");
+      return { coefficient: parseCoefficient(value), error: "" };
     } catch (error) {
-      field.setCustomValidity(
-        error instanceof Error ? error.message : "Проверьте формулу.",
-      );
+      return {
+        coefficient: null,
+        error: error instanceof Error ? error.message : "Проверьте формулу.",
+      };
     }
-  }
-  useEffect(() => {
-    if (input.current) validate(input.current);
   }, [value]);
+  useEffect(() => {
+    input.current?.setCustomValidity(error);
+  }, [error]);
   return (
-    <input
-      ref={input}
-      name={id}
-      id={id}
-      className="numeric-input formula-input"
-      aria-label={labelledBy ? undefined : label}
-      aria-labelledby={labelledBy}
-      aria-describedby="coefficient-help"
-      required
-      maxLength={2000}
-      autoComplete="off"
-      spellCheck={false}
-      value={value}
-      onChange={(event) => onChange(event.currentTarget.value)}
-      onBlur={(event) => validate(event.currentTarget)}
-    />
+    <div className="coefficient-cell">
+      <input
+        ref={input}
+        name={id}
+        id={id}
+        className="numeric-input formula-input"
+        aria-label={labelledBy ? undefined : label}
+        aria-labelledby={labelledBy}
+        aria-describedby="coefficient-help"
+        required
+        maxLength={2000}
+        autoComplete="off"
+        spellCheck={false}
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+      />
+      {focused && coefficient && value.includes("t") && (
+        <div className="coefficient-preview" aria-hidden="true">
+          <math>
+            <RationalExpression {...coefficient} />
+          </math>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -292,7 +316,9 @@ function Matrix<T>({
         <caption>{name}</caption>
         <thead>
           <tr>
-            <th scope="col">Строка / столбец</th>
+            <th scope="col" aria-label="Индексы строки и столбца">
+              i / j
+            </th>
             {columnNames.map((name, j) => (
               <th scope="col" key={j}>
                 {name}
@@ -408,13 +434,13 @@ export default function Editor({ scenario, onChange, busy, onRun }: Props) {
         <legend className="visually-hidden">Параметры модели</legend>
 
         <Section title="Постановка задачи">
-          <p className="formula-inline">
-            max f(x, t) = xᵀA(t)x + b(t)ᵀx + c(t) &nbsp; при &nbsp; K(t)x ≤ l(t)
-          </p>
+          <div className="equation-stack">
+            <QuadraticObjective maximize />
+            <QuadraticConstraint nonnegative={nonnegative} />
+          </div>
           <p id="coefficient-help" className="help-text">
-            Коэффициент можно задать числом, многочленом или дробью. Например{" "}
-            <code>−1−t^2</code> или <code>(−1−t^2)/(1+t)</code>. Степень
-            многочлена — до 12.
+            Введите число, многочлен <code>-1-t^2</code> или дробь{" "}
+            <code>(-1-t^2)/(1+t)</code>. Степень многочлена до 12.
           </p>
         </Section>
 
@@ -430,58 +456,62 @@ export default function Editor({ scenario, onChange, busy, onRun }: Props) {
             />
           }
         >
-          <Matrix
-            name="Матрица A(t)"
-            values={formulas.A}
-            rowNames={varNames}
-            columnNames={varNames}
-            renderCell={(v, i, j) => (
-              <FormulaCell
-                label={`A[${i + 1}, ${j + 1}]`}
-                value={v}
-                onChange={(value) => matrixFormula("A", i, j, value)}
-              />
-            )}
-          />
-          <div
-            className="table-scroll"
-            tabIndex={0}
-            role="region"
-            aria-label="Вектор b(t)"
-          >
-            <table className="input-table">
-              <thead>
-                <tr>
-                  <th scope="col">Переменная</th>
-                  <th scope="col">b(t)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {varNames.map((name, i) => (
-                  <tr key={i}>
-                    <th scope="row">{name}</th>
+          <div className="qp-objective-grid">
+            <Matrix
+              name="Матрица A(t)"
+              values={formulas.A}
+              rowNames={varNames}
+              columnNames={varNames}
+              renderCell={(v, i, j) => (
+                <FormulaCell
+                  label={`A[${i + 1}, ${j + 1}]`}
+                  value={v}
+                  onChange={(value) => matrixFormula("A", i, j, value)}
+                />
+              )}
+            />
+            <div className="qp-linear-terms">
+              <div
+                className="table-scroll"
+                tabIndex={0}
+                role="region"
+                aria-label="Вектор b(t)"
+              >
+                <table className="input-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Переменная</th>
+                      <th scope="col">b(t)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {varNames.map((name, i) => (
+                      <tr key={i}>
+                        <th scope="row">{name}</th>
 
-                    <td>
-                      <FormulaCell
-                        label={`b[${i + 1}]`}
-                        value={formulas.b[i]}
-                        onChange={(value) => vectorFormula("b", i, value)}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="inline-fields">
-            <div className="field">
-              <span id="c-formula">Свободный член c(t)</span>
-              <FormulaCell
-                label="c(t)"
-                labelledBy="c-formula"
-                value={formulas.c}
-                onChange={(value) => formula("c", value)}
-              />
+                        <td>
+                          <FormulaCell
+                            label={`b[${i + 1}]`}
+                            value={formulas.b[i]}
+                            onChange={(value) => vectorFormula("b", i, value)}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="inline-fields">
+                <div className="field">
+                  <span id="c-formula">Свободный член c(t)</span>
+                  <FormulaCell
+                    label="c(t)"
+                    labelledBy="c-formula"
+                    value={formulas.c}
+                    onChange={(value) => formula("c", value)}
+                  />
+                </div>
+              </div>
             </div>
           </div>
           <p className="help-text">
@@ -491,7 +521,7 @@ export default function Editor({ scenario, onChange, busy, onRun }: Props) {
         </Section>
 
         <Section
-          title="Ограничения K(t)x ≤ l(t)"
+          title="Ограничения"
           actions={
             <Dimension
               label="Число строк m"
@@ -701,9 +731,7 @@ export default function Editor({ scenario, onChange, busy, onRun }: Props) {
                   onChange={(weightValue) => config({ weightValue })}
                 />
               </div>
-              <p className="formula-inline">
-                H(D) = α₁ ∑ ‖x − x̃‖² + α₂ ∑ (f(x, t) − f(x̃, t))²
-              </p>
+              <QuadraticLoss />
               <p className="help-text">
                 Хотя бы один вес должен быть положительным. Величина критерия
                 зависит от единиц измерения.

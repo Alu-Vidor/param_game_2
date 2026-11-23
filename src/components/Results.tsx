@@ -1,3 +1,11 @@
+import {
+  Approx,
+  Call,
+  FractionCard,
+  MathBlock,
+  MathNumber,
+} from "./MathNotation";
+import { QuadraticObjective } from "./QuadraticNotation";
 import { useEffect, useId, useState } from "react";
 import { Download, Info } from "lucide-react";
 import type { Scenario } from "../lib/workspace";
@@ -16,19 +24,6 @@ function csvCell(value: string | number | null) {
   return `"${safe.replaceAll('"', '""')}"`;
 }
 
-function polynomial(coefficients: number[], symbol: string) {
-  const terms: string[] = [];
-  for (let i = coefficients.length - 1; i >= 0; i--) {
-    const value = coefficients[i];
-    if (value === 0) continue;
-    const coefficient = Number(Math.abs(value).toPrecision(8)).toString();
-    const power = i === 0 ? "" : i === 1 ? symbol : `${symbol}^${i}`;
-    const body = `${power && Math.abs(value) === 1 ? "" : coefficient}${power && Math.abs(value) !== 1 ? " × " : ""}${power}`;
-    terms.push(`${value < 0 ? "− " : terms.length ? "+ " : ""}${body}`);
-  }
-  return terms.join(" ") || "0";
-}
-
 function Formula({
   fit,
   name,
@@ -41,21 +36,22 @@ function Formula({
   symbol: string;
 }) {
   return (
-    <div className="formula-item">
-      <h3>{name}</h3>
-      <div
-        className="formula-expression"
-        role="math"
-        aria-label={`Приближение x${index + 1}: (${polynomial(fit.numerator, symbol)}) / (${polynomial(fit.denominator, symbol)})`}
-      >
-        <span>
-          x̃<sub>{index + 1}</sub>(t) ={" "}
-        </span>
-        <span className="fraction">
-          <span>{polynomial(fit.numerator, symbol)}</span>
-          <span>{polynomial(fit.denominator, symbol)}</span>
-        </span>
-      </div>
+    <FractionCard
+      title={name}
+      label={
+        <Call
+          name={
+            <msub>
+              <Approx name="x" />
+              <mn>{index + 1}</mn>
+            </msub>
+          }
+        />
+      }
+      numerator={fit.numerator}
+      denominator={fit.denominator}
+      symbol={symbol}
+    >
       <details>
         <summary>Коэффициенты без округления</summary>
         <dl className="coefficient-list">
@@ -69,7 +65,7 @@ function Formula({
           </dd>
         </dl>
       </details>
-    </div>
+    </FractionCard>
   );
 }
 
@@ -423,27 +419,37 @@ export default function Results({ scenario }: Props) {
             <div className="section-heading">
               <h2>Рациональное приближение решения</h2>
               <p>
-                {result.argumentCenter === undefined
-                  ? "Коэффициенты записаны в степенях t."
-                  : "Коэффициенты записаны в степенях s, где s = t − (" +
-                    String(result.argumentCenter) +
-                    ")."}
+                Коэффициенты показаны с округлением. Копирование сохраняет
+                полную точность выражения.
               </p>
             </div>
-            {result.fits.map((fit, i) => (
-              <Formula
-                key={i}
-                fit={fit}
-                name={variableNames[i]}
-                index={i}
-                symbol={result.argumentCenter === undefined ? "t" : "s"}
-              />
-            ))}
+            {result.argumentCenter !== undefined && (
+              <MathBlock>
+                <mrow>
+                  <mi>s</mi>
+                  <mo>=</mo>
+                  <mi>t</mi>
+                  <mo>−</mo>
+                  <mo>(</mo>
+                  <MathNumber value={result.argumentCenter} digits={17} />
+                  <mo>)</mo>
+                </mrow>
+              </MathBlock>
+            )}
+            <div className="math-card-grid">
+              {result.fits.map((fit, i) => (
+                <Formula
+                  key={i}
+                  fit={fit}
+                  name={variableNames[i]}
+                  index={i}
+                  symbol={result.argumentCenter === undefined ? "t" : "s"}
+                />
+              ))}
+            </div>
             <div className="formula-item">
               <h3>Приближение результата</h3>
-              <p className="formula-expression">
-                f̃(t) = x̃(t)ᵀ A(t) x̃(t) + b(t)ᵀ x̃(t) + c(t)
-              </p>
+              <QuadraticObjective approximate />
               <p className="help-text">
                 Результат вычисляется подстановкой приближённого вектора в
                 исходную целевую функцию.
